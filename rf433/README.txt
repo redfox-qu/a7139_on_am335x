@@ -21,5 +21,4 @@
     rfrepeater.h        -   协议处理转发头文件
 
 3，编译说明
-    在模块根目录下，执行make，可执行文件将生成在模块目录下，执行make
-install，将rfrepeater和rfcli进行strip后，安装至rootfs目录中。
+    在模块根目录下，执行make，可执行文件将生成在模块目录下，执行make install，将rfrepeater和rfcli进行strip后，安装至rootfs目录中。
