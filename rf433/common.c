@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <syslog.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -93,6 +94,11 @@ unsigned char CRC8_TAB[256] = {
     0xb6, 0xe8, 0x0a, 0x54, 0xd7, 0x89, 0x6b, 0x35
 };
 
+int get_debug_mode(void)
+{
+    return debug_mode;
+}
+
 /*****************************************************************************
 * Function Name  : set_loglevel
 * Description    : set rfrepeater deamon syslog debug level
@@ -102,13 +108,25 @@ unsigned char CRC8_TAB[256] = {
 *****************************************************************************/
 void set_loglevel(int n)
 {
-    if (n > SYS_EMERG && n <= SYS_DEBUG)
+    if (n > LOG_EMERG && n <= LOG_DEBUG)
     {
         loglevel = n;
         return;
     }
 
     return;
+}
+
+/*****************************************************************************
+* Function Name  : sys_openlog
+* Description    : open syslog
+* Input          : char*, ...
+* Output         : none
+* Return         : void
+*****************************************************************************/
+void sys_openlog(char *logname)
+{
+    openlog(logname, LOG_PID, LOG_DAEMON);
 }
 
 /*****************************************************************************
@@ -122,7 +140,6 @@ void sys_printf(int level, const char* format, ...)
 {
     char tmpline[1024];
     va_list args;
-    int p;
 
     if (loglevel < level)
         return;
@@ -130,43 +147,16 @@ void sys_printf(int level, const char* format, ...)
     memset(tmpline, 0, 1024);
 
     va_start(args, format);
-    p = snprintf(tmpline, 1023, "[%d]", getpid());
-    vsnprintf(tmpline + p, 1023 - p, format, args);
+    vsnprintf(tmpline, 1023, format, args);
     va_end(args);
 
     if (debug_mode) {
-        fprintf(stderr, "%s\n", tmpline);
+        time_t t;
+        t = time(NULL);
+        fprintf(stderr, "[%s] %s\n", ctime(&t), tmpline);
     } else {
-        switch (level) {
-            case SYS_EMERG:
-                syslog(SYS_EMERG, "%s\n", tmpline);
-                break;
-            case SYS_ALERT:
-                syslog(SYS_ALERT, "%s\n", tmpline);
-                break;
-            case SYS_CRIT:
-                syslog(SYS_CRIT, "%s\n", tmpline);
-                break;
-            case SYS_ERR:
-                syslog(SYS_ERR, "%s\n", tmpline);
-                break;
-            case SYS_WARNING:
-                syslog(SYS_WARNING, "%s\n", tmpline);
-                break;
-            case SYS_NOTICE:
-                syslog(SYS_NOTICE, "%s\n", tmpline);
-                break;
-            case SYS_INFO:
-                syslog(SYS_INFO, "%s\n", tmpline);
-                break;
-            case SYS_DEBUG:
-                syslog(SYS_DEBUG, "%s\n", tmpline);
-            default:
-                break;
-        }
+        syslog(level, tmpline);
     }
-
-    return;
 }
 
 /*****************************************************************************
@@ -444,6 +434,24 @@ uint8_t crc8(char *data, uint8_t len)
     return (crc8_ret);
 }
 
+int msg_check(buffer *msg_buf)
+{
+    struct msg_st *msg;
 
+    if (buf_len(msg_buf) <= sizeof(struct msg_head)) {
+        return -1;
+    }
+
+    msg = (struct msg_st *)buf_data(msg_buf);
+    if (msg->h.magic[0] != MSG_CTL_MAGIC_0 || msg->h.magic[1] != MSG_CTL_MAGIC_1) {
+        return -1;
+    }
+
+    if (msg->h.version != MSG_CTL_VERSION) {
+        return -1;
+    }
+
+    return 0;
+}
 
 

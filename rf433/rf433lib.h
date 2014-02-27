@@ -88,7 +88,7 @@ char *rf433_get_rate_str(A7139_RATE rate);
 int open_rf433(char *dev);
 int open_socket(void);
 void set_non_blk(int fd);
-int set_socket_opt(int fd, uint16_t lport, struct in_addr sip, uint16_t sport);
+int set_socket_opt(int fd, uint16_t lport);
 int set_rf433_opt(int fd, uint16_t netid, uint8_t rate);
 int rf433_set_netid(int fd, uint16_t net_id);
 int rf433_get_netid(int fd, uint16_t *net_id);

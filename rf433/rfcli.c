@@ -8,6 +8,7 @@
 // History:
 //      <author>            <time>      <version>   <desc>
 //      redfox.qu@qq.com    2013/12/26  1.0.0       create this file
+//      redfox.qu@qq.com    2014/2/11   1.1.0       use udp-socket replace msg for IPC
 //
 // TODO:
 //      2013/12/31          add the common and debug
@@ -24,15 +25,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
-#include <sys/msg.h>
+#include <sys/socket.h>
 #include <errno.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include "common.h"
 #include "rfcli.h"
-
-static int server_msg_qid;
-static int client_msg_qid;
+#include "rf433lib.h"
 
 /*****************************************************************************
 * Function Name  : alrm_handler
@@ -49,29 +48,29 @@ void alrm_handler(int s)
 }
 
 /*****************************************************************************
-* Function Name  : show_rf433
-* Description    : show the rf433 configure
-* Input          : rf433_cfg*
+* Function Name  : show_config
+* Description    : show rfrepeater configure
+* Input          : msg_config*
 * Output         : display
 * Return         : None
 *****************************************************************************/
-void show_rf433(rf433_cfg *cfg)
+void show_config(struct msg_st *rmsg)
 {
-    printf("%s=%d\n", RF433_NVR_NET_ID, RF433_NET_ID(cfg->net_id));
-    printf("%s=0x%08x\n", RF433_NVR_LOCAL_ADDR, cfg->local_addr);
-}
+    struct msg_config *cfg;
+    uint8_t ret;
 
-/*****************************************************************************
-* Function Name  : show_socket
-* Description    : show the socket configure
-* Input          : socket_cfg*
-* Output         : display
-* Return         : None
-*****************************************************************************/
-void show_socket(socket_cfg *cfg)
-{
-    printf("%s=%s\n", RF433_NVR_SRV_IP, inet_ntoa(cfg->server_ip));
-    printf("%s=%d\n", RF433_NVR_UDP_PORT, cfg->server_port);
+    ret = rmsg->d.content[0];
+    if (ret != MSG_RET_OK) {
+        printf("####Error %d\n", ret);
+        return;
+    }
+
+    cfg = (struct msg_config *)&rmsg->d.content[1];
+
+    printf("%s=%d\n", RF433_NVR_NET_ID, RF433_NET_ID(cfg->rf433.net_id));
+    printf("%s=0x%08x\n", RF433_NVR_LOCAL_ADDR, cfg->rf433.local_addr);
+    printf("%s=%s\n", RF433_NVR_SRV_IP, inet_ntoa(cfg->socket.server_ip));
+    printf("%s=%d\n", RF433_NVR_UDP_PORT, cfg->socket.server_port);
 }
 
 /*****************************************************************************
@@ -81,19 +80,34 @@ void show_socket(socket_cfg *cfg)
 * Output         : display
 * Return         : None
 *****************************************************************************/
-void show_se433_list(se433_data *se433data)
+void show_se433_list(struct msg_st *rmsg)
 {
-    printf("addr=0x%08x, req_cnt=%d, rsp_cnt=%d, type=0x%02x, " \
-            "data=%.3f, vol=0x%02x, batt=0x%02x, flag=0x%02x, whid=0x%02x\n",
-            se433data->addr,
-            se433data->req_cnt,
-            se433data->rsp_cnt,
-            se433data->data.type,
-            se433data->data.data,
-            se433data->data.vol,
-            se433data->data.batt,
-            se433data->data.flag,
-            se433data->data.watchid);
+    se433_data *se433data;
+    uint8_t ret, num, i;
+
+    ret = rmsg->d.content[0];
+    if (ret != MSG_RET_OK) {
+        printf("####Error %d\n", ret);
+        return;
+    }
+
+    num = rmsg->d.content[1];
+    se433data = (se433_data *)&rmsg->d.content[2];
+
+    for (i = 0; i < num; i++) {
+        printf("addr=0x%08x, req_cnt=%d, rsp_cnt=%d, type=0x%02x, " \
+                "data=%.3f, vol=0x%02x, batt=0x%02x, flag=0x%02x, whid=0x%02x\n",
+                se433data->addr,
+                se433data->req_cnt,
+                se433data->rsp_cnt,
+                se433data->data.type,
+                se433data->data.data,
+                se433data->data.vol,
+                se433data->data.batt,
+                se433data->data.flag,
+                se433data->data.watchid);
+        se433data++;
+    }
 }
 
 /*****************************************************************************
@@ -103,18 +117,21 @@ void show_se433_list(se433_data *se433data)
 * Output         : display
 * Return         : None
 *****************************************************************************/
-int show_resp(char *resp)
+int show_resp(struct msg_st *rmsg)
 {
     /* all success response will no message,
      * and all error response will say some word like 'XXX error'.
      * if the verbose message not in the response
      * please see the syslog
      */
-    int resp_len = strlen(resp);
+    uint8_t ret;
+    char *resp;
 
-    if (resp_len != 0) {
+    ret = rmsg->d.content[0];
+    resp = (char*)&rmsg->d.content[1];
+
+    if (ret != MSG_RET_OK) {
         printf("####Error %s\n", resp);
-        return resp_len;
     }
 
     return 0;
@@ -127,48 +144,45 @@ int show_resp(char *resp)
 * Output         : display
 * Return         : None
 *****************************************************************************/
-int send_msg(int type, void *p)
+int send_msg(int fd, buffer *msg_wbuf, int type, void *p, int len)
 {
+    struct msg_st *wmsg = (struct msg_st *)buf_data(msg_wbuf);
+    struct sockaddr_in cliaddr;
+    socklen_t sock_len;
     int ret;
-    struct msg_st msg;
 
-    msg.mkey = getpid();
-    msg.mtype = type;
-    switch (type) {
-        case MSG_REQ_SET_RF433:
-            memcpy(&msg.u.rf433, p, sizeof(rf433_cfg));
-            break;
+    buf_clean(msg_wbuf);
 
-        case MSG_REQ_SET_SOCK:
-            memcpy(&msg.u.socket, p, sizeof(socket_cfg));
-            break;
+    wmsg->h.magic[0] = MSG_CTL_MAGIC_0;
+    wmsg->h.magic[1] = MSG_CTL_MAGIC_1;
+    wmsg->h.flags = 0;
+    wmsg->h.version = MSG_CTL_VERSION;
 
-        case MSG_REQ_SET_SE433:
-            memcpy(&msg.u.se433, p, sizeof(se433_cfg));
-            break;
+    wmsg->d.type = type;
 
-        case MSG_REQ_READ_CFG:
-        case MSG_REQ_SAVE_CFG:
-        case MSG_REQ_GET_CFG:
-        case MSG_REQ_GET_SE433L:
-            msg.u.opt = type;
-            break;
+    buf_incrlen(msg_wbuf, sizeof(struct msg_head) + 4);
 
-        case MSG_REQ_SET_LOG:
-            msg.u.msg_level = *(int*)p;
-            break;
+    buf_append(msg_wbuf, (char*)p, len);
 
-        default:
-            printf("\nsend_msg(): msg type %d error!\n\n", type);
-            return -1;
-            break;
-    }
+    /*
+    printf("send message:\n");
+    buf_dump(msg_wbuf);
+    */
 
-    ret = msgsnd(server_msg_qid, &msg, sizeof(msg) - sizeof(long), 0);
+    sock_len = sizeof(cliaddr);
+    bzero(&cliaddr, sock_len);
+
+    cliaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    cliaddr.sin_port = htons(SRV_CTL_UDP_PORT);
+    cliaddr.sin_family = AF_INET;
+
+    ret = sendto(fd, buf_data(msg_wbuf), buf_len(msg_wbuf), 0,
+            (struct sockaddr*)&cliaddr, sock_len);
     if (ret == -1) {
-        printf("send_msg(): msgsnd() err: %s\n", strerror(errno));
+        printf("send_msg(): sendto() err: %s\n", strerror(errno));
         return -1;
     }
+
     return 0;
 }
 
@@ -180,11 +194,12 @@ int send_msg(int type, void *p)
 * Return         : int
 *                  - 0: ok
 *****************************************************************************/
-int recv_msg(void)
+int recv_msg(int ctl_fd, buffer *msg_rbuf)
 {
     int ret = 0;
-    int msg_len;
-    struct msg_st msg;
+    struct sockaddr_in ctl_cli;
+    socklen_t sock_len;
+    struct msg_st *rmsg = (struct msg_st *)buf_data(msg_rbuf);
 
     if (signal(SIGALRM, alrm_handler) == SIG_ERR) {
         printf("signal(SIGALRM) error\n");
@@ -193,34 +208,46 @@ int recv_msg(void)
 
     alarm(RECV_MSG_TIME_OUT);
 
-    while (1) {
-        msg_len = msgrcv(client_msg_qid, &msg, sizeof(msg)-sizeof(long), getpid(), 0);
-        if (msg_len == -1) {
-            printf("recv_msg(): msgrcv() err: %s\n", strerror(errno));
-            goto out;
-        }
+    sock_len = sizeof(ctl_cli);
+    ret = recvfrom(ctl_fd, buf_data(msg_rbuf), buf_space(msg_rbuf), 0,
+            (struct sockaddr*)&ctl_cli, &sock_len);
 
-        switch (msg.mtype) {
-            case MSG_RSP_RF433:
-                show_rf433(&msg.u.rf433);
-                break;
+    if (ret <= 0) {
+        /* maybe error */
+        printf("recvfrom(ctl_fd) error: (%d)%s", ret, strerror(errno));
 
-            case MSG_RSP_SOCKET:
-                show_socket(&msg.u.socket);
-                break;
+        /* exit the thread */
+        goto out;
+    }
 
-            case MSG_RSP_SE433L:
-                show_se433_list(&msg.u.se433data);
-                break;
+    buf_incrlen(msg_rbuf, ret);
 
-            case MSG_RSP_END:
-                show_resp(msg.u.resp);
-                goto out;
-                break;
+    /*
+    printf("recive message:\n");
+    buf_dump(msg_rbuf);
+    */
 
-            default:
-                goto out;
-        }
+    if (msg_check(msg_rbuf) < 0) {
+        printf("got a invalid ctrl message\n");
+        goto out;
+    }
+
+    switch (rmsg->d.type) {
+        case MSG_RSP_GET_CFG:
+            show_config(rmsg);
+            break;
+
+        case MSG_RSP_GET_SE433L:
+            show_se433_list(rmsg);
+            break;
+
+        case MSG_RSP_END:
+            show_resp(rmsg);
+            break;
+
+        default:
+            printf("Unknown MSG command %ld", rmsg->d.type);
+            break;
     }
 
 out:
@@ -261,10 +288,10 @@ config options: \n \
 int main(int argc, char **argv)
 {
     int opt, log_level, opt_id = 0;
+    struct msg_config cfg;
     int ret = 0;
-    int msg_retry;
-    socket_cfg sock_set;
-    rf433_cfg rf433_set;
+    int ctl_fd = -1;
+    buffer *ctl_rbuf = NULL, *ctl_wbuf = NULL;
     se433_cfg se433_set;
 
     struct option longopts[] = {
@@ -282,13 +309,13 @@ int main(int argc, char **argv)
         { 0, 0, 0, 0 },
     };
 
-    rf433_set.net_id        = RF433_CFG_NET_ID;
-    rf433_set.local_addr    = RF433_CFG_LOCAL_ADDR;
-    rf433_set.m_mask        = 0;
+    cfg.rf433.net_id        = RF433_CFG_NET_ID;
+    cfg.rf433.local_addr    = RF433_CFG_LOCAL_ADDR;
+    cfg.rf433.m_mask        = 0;
 
-    sock_set.server_ip.s_addr = inet_addr(RF433_CFG_SRV_IP);
-    sock_set.server_port    = RF433_CFG_UDP_PORT;
-    sock_set.m_mask         = 0;
+    cfg.socket.server_ip.s_addr = inet_addr(RF433_CFG_SRV_IP);
+    cfg.socket.server_port  = RF433_CFG_UDP_PORT;
+    cfg.socket.m_mask       = 0;
 
     se433_set.se433_addr    = 0;
     se433_set.op            = 0;
@@ -326,21 +353,21 @@ int main(int argc, char **argv)
                 break;
 
             case 'N':                   // netid
-                if ((get_netid(optarg, &rf433_set.net_id)) == -1) {
+                if ((get_netid(optarg, &cfg.rf433.net_id)) == -1) {
                     fprintf(stderr, "\n invalid value (%s)\n\n", optarg);
                     ret = -1;
                     goto err;
                 }
-                rf433_set.m_mask |= RF433_MASK_NET_ID;
+                cfg.rf433.m_mask |= RF433_MASK_NET_ID;
                 break;
 
             case 'A':                   // addr
-                if ((get_local_addr(optarg, &rf433_set.local_addr)) == -1) {
+                if ((get_local_addr(optarg, &cfg.rf433.local_addr)) == -1) {
                     fprintf(stderr, "\n invalid value (%s)\n\n", optarg);
                     ret = -1;
                     goto err;
                 }
-                rf433_set.m_mask |= RF433_MASK_RCV_ADDR;
+                cfg.rf433.m_mask |= RF433_MASK_RCV_ADDR;
                 break;
 #if 0
             case 'E':                   // seadd
@@ -362,21 +389,21 @@ int main(int argc, char **argv)
                 break;
 #endif
             case 'I':                   // rip
-                if ((get_ip(optarg, &sock_set.server_ip)) == -1) {
+                if ((get_ip(optarg, &cfg.socket.server_ip)) == -1) {
                     fprintf(stderr, "\n invalid value (%s)\n\n", optarg);
                     ret = -1;
                     goto err;
                 }
-                sock_set.m_mask |= SOCK_MASK_SER_IP;
+                cfg.socket.m_mask |= SOCK_MASK_SER_IP;
                 break;
 
             case 'P':                   // rport
-                if ((get_port(optarg, &sock_set.server_port)) == -1) {
+                if ((get_port(optarg, &cfg.socket.server_port)) == -1) {
                     fprintf(stderr, "\n invalid value (%s)\n\n", optarg);
                     ret = -1;
                     goto err;
                 }
-                sock_set.m_mask |= SOCK_MASK_UDP_PORT;
+                cfg.socket.m_mask |= SOCK_MASK_UDP_PORT;
                 break;
 
             case 'h':
@@ -394,102 +421,97 @@ int main(int argc, char **argv)
     }
 
 
+    ctl_rbuf = buf_new_max();
+    if (ctl_rbuf == NULL) {
+        printf("new ctl_rbuf memory error");
+        goto err;
+    }
+
+    ctl_wbuf = buf_new_max();
+    if (ctl_wbuf == NULL) {
+        printf("new ctl_wbuf memory error");
+        goto err;
+    }
+
     // create msg quere
-    for (msg_retry = 0; msg_retry < MSG_RETRY_MAX; msg_retry++) {
-        server_msg_qid = msgget((key_t)SERVER_MSG, 0666);
-        client_msg_qid = msgget((key_t)CLIENT_MSG, 0666);
-
-        if (server_msg_qid != -1 && client_msg_qid == -1) {
-            break;
-        }
-        usleep(MSG_RETRY_UDELAY);
-    }
-
-    if (server_msg_qid == -1) {
-        fprintf(stderr, "msgget(server_msg_qid):%s\n", strerror(errno));
-        ret = -3;
+    ctl_fd = open_socket();
+    if (ctl_fd < 0) {
+        printf("open ctl_fd error");
         goto err;
     }
-    if (client_msg_qid == -1) {
-        fprintf(stderr, "msgget(client_msg_qid):%s\n", strerror(errno));
-        ret = -3;
-        goto err;
-    }
+    set_socket_opt(ctl_fd, CLI_CTL_UDP_PORT);
 
 
-    if (rf433_set.m_mask) {
-        ret = send_msg(MSG_REQ_SET_RF433, &rf433_set);
+    /* send and receive message */
+    if (cfg.rf433.m_mask || cfg.socket.m_mask) {
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_SET_CFG, &cfg, sizeof(cfg));
         if (ret != 0)
             goto err;
-        ret = recv_msg();
-        if (ret != 0)
-            goto err;
-    }
-
-    if (sock_set.m_mask) {
-        ret = send_msg(MSG_REQ_SET_SOCK, &sock_set);
-        if (ret != 0)
-            goto err;
-        ret = recv_msg();
-        if (ret != 0)
-            goto err;
-    }
-
-    if (se433_set.op) {
-        ret = send_msg(MSG_REQ_SET_SE433, &se433_set);
-        if (ret != 0)
-            goto err;
-        ret = recv_msg();
-        if (ret != 0)
-            goto err;
-    }
-
-    if (opt_id & MSG_REQ_READ_CFG) {
-        ret = send_msg(MSG_REQ_READ_CFG, NULL);
-        if (ret != 0)
-            goto err;
-        ret = recv_msg();
-        if (ret != 0)
-            goto err;
-    }
-
-    if (opt_id & MSG_REQ_SAVE_CFG) {
-        ret = send_msg(MSG_REQ_SAVE_CFG, NULL);
-        if (ret != 0)
-            goto err;
-        ret = recv_msg();
+        ret = recv_msg(ctl_fd, ctl_rbuf);
         if (ret != 0)
             goto err;
     }
 
     if (opt_id & MSG_REQ_GET_CFG) {
-        ret = send_msg(MSG_REQ_GET_CFG, NULL);
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_GET_CFG, NULL, 0);
         if (ret != 0)
             goto err;
-        ret = recv_msg();
+        ret = recv_msg(ctl_fd, ctl_rbuf);
         if (ret != 0)
             goto err;
     }
 
-    if (opt_id & MSG_REQ_GET_SE433L) {
-        ret = send_msg(MSG_REQ_GET_SE433L, NULL);
+    if (opt_id & MSG_REQ_READ_CFG) {
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_READ_CFG, NULL, 0);
         if (ret != 0)
             goto err;
-        ret = recv_msg();
+        ret = recv_msg(ctl_fd, ctl_rbuf);
+        if (ret != 0)
+            goto err;
+    }
+
+    if (opt_id & MSG_REQ_SAVE_CFG) {
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_SAVE_CFG, NULL, 0);
+        if (ret != 0)
+            goto err;
+        ret = recv_msg(ctl_fd, ctl_rbuf);
         if (ret != 0)
             goto err;
     }
 
     if (opt_id & MSG_REQ_SET_LOG) {
-        ret = send_msg(MSG_REQ_SET_LOG, &log_level);
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_SET_LOG, &log_level, sizeof(log_level));
         if (ret != 0)
             goto err;
-        ret = recv_msg();
+        ret = recv_msg(ctl_fd, ctl_rbuf);
+        if (ret != 0)
+            goto err;
+    }
+
+    if (se433_set.op) {
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_SET_SE433, &se433_set, sizeof(se433_set));
+        if (ret != 0)
+            goto err;
+        ret = recv_msg(ctl_fd, ctl_rbuf);
+        if (ret != 0)
+            goto err;
+    }
+
+    if (opt_id & MSG_REQ_GET_SE433L) {
+        ret = send_msg(ctl_fd, ctl_wbuf, MSG_REQ_GET_SE433L, NULL, 0);
+        if (ret != 0)
+            goto err;
+        ret = recv_msg(ctl_fd, ctl_rbuf);
         if (ret != 0)
             goto err;
     }
 
 err:
+    buf_free(ctl_rbuf);
+    buf_free(ctl_wbuf);
+    if (ctl_fd > 0) {
+        close(ctl_fd);
+    }
     exit(ret);
 }
 

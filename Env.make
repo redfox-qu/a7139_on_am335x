@@ -18,6 +18,9 @@ export STRIP            = $(CROSS_COMPILE)strip
 export OBJCOPY          = $(CROSS_COMPILE)objcopy
 export OBJDUMP          = $(CROSS_COMPILE)objdump
 
+export HOSTCC           = gcc
+export HOSTLD           = ld
+
 #The directory that points to the u-boot source tree
 UBOOT_DIR               = $(TOP_DIR)/u-boot-2011.09-psp04.06.00.08
 
@@ -45,11 +48,15 @@ CONFIG_DIR              = $(TOOL_DIR)/configfile
 TOOL_PACKIMAGE_DIR      = $(TOOL_DIR)/packimage
 TOOL_SDCARD_UPGRADE_DIR = $(TOOL_DIR)/sdcard_upgrade
 
+# for the extend support module
 EXTEND_SUPPORT          = SOCKCLI
+CFLAGS_EXTEND           = $(addprefix -D, $(EXTEND_SUPPORT))
+export CFLAGS_EXTEND
 
-V			?= 0
+# for the verbose/quite Make Message
+V ?= 0
 ifeq ($(V), 99)
-	ECHO 	:=
+    ECHO :=
 else
-	ECHO	:= @
+    ECHO := @
 endif

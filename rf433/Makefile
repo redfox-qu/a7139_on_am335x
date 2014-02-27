@@ -1,11 +1,12 @@
-TOP_DIR = $(shell /bin/pwd)/../..
+TOP_DIR 	:= $(CURDIR)/..
 
 include $(TOP_DIR)/Env.make
 
+
 RFP_TARGET	:= rfrepeater
 RFC_TARGET	:= rfcli
-RFP_SHELL	:= rf433.sh
-RFP_S_SHELL	:= S90can_net
+RFP_SHELL	:= rfrepeater.sh
+RFP_S_SHELL	:= S90rfrepeater
 VRFP_TEST	:= rf433_udp_test
 ERFP_TEST	:= rf433_se433_test
 RD_TEST		:= rf433_read
@@ -15,56 +16,61 @@ INST_ETC_D  := $(INST_DIR)/etc
 INST_BIN_D	:= $(INST_DIR)/usr/sbin
 
 RFP_OBJS	:= rfrepeater.o rf433lib.o common.o buffer.o
-RFC_OBJS	:= rfcli.o common.o
+RFC_OBJS	:= rfcli.o common.o rf433lib.o buffer.o
 VRFP_OBJS	:= rf433_udp_test.o rf433lib.o common.o buffer.o
 ERFP_OBJS	:= rf433_se433_test.o rf433lib.o common.o buffer.o
 RD_OBJS		:= rf433_read.o rf433lib.o common.o buffer.o
 RF_HEADER	:= rfrepeater.h rf433lib.h rf433pkg.h common.h rfcli.h buffer.h list.h
 
-CFLAGS  	+= -I$(FS_DIR)/nvram -I./ -I$(LINUXKERNEL_DIR) -g -Werror -Wall
-LDFLAGS 	+= -L$(FS_DIR)/nvram -lpthread -lnvram
+#CFLAGS_EXTEND	+= -DAPPLOG
 
-all: $(TARGET)
+CFLAGS  	+= -I$(FS_DIR)/nvram -I$(FS_DIR)/applog -I./ -I$(LINUXKERNEL_DIR) -g -Werror -Wall $(CFLAGS_EXTEND)
+LDFLAGS 	+= -L$(FS_DIR)/nvram -L$(FS_DIR)/applog -lpthread -lnvram -lapplog
+
+all: $(TARGET) SKCLI_ALL
+
 
 $(RFP_TARGET): $(RFP_OBJS) $(RF_HEADER)
-	@echo LD $@
-	@$(CC) $(LDFLAGS) -o $(RFP_TARGET) $(RFP_OBJS)
+	$(ECHO)echo LD $@
+	$(ECHO)$(CC) $(LDFLAGS) -o $(RFP_TARGET) $(RFP_OBJS)
 
 $(RFC_TARGET): $(RFC_OBJS) $(RF_HEADER)
-	@echo LD $@
-	@$(CC) $(LDFALGS) -o $(RFC_TARGET) $(RFC_OBJS)
+	$(ECHO)echo LD $@
+	$(ECHO)$(CC) $(LDFLAGS) -o $(RFC_TARGET) $(RFC_OBJS)
 
 $(VRFP_TEST): $(VRFP_OBJS) $(RF_HEADER)
-	@echo LD $@
-	@$(CC) $(LCFLAGS) -o $@ $(VRFP_OBJS)
+	$(ECHO)echo LD $@
+	$(ECHO)$(CC) $(LDFLAGS) -o $@ $(VRFP_OBJS)
 
 $(ERFP_TEST): $(ERFP_OBJS) $(RF_HEADER)
-	@echo LD $@
-	@$(CC) $(LCFLAGS) -o $@ $(ERFP_OBJS)
+	$(ECHO)echo LD $@
+	$(ECHO)$(CC) $(LDFLAGS) -o $@ $(ERFP_OBJS)
 
 $(RD_TEST): $(RD_OBJS) $(RF_HEADER)
-	@echo LD $@
-	@$(CC) $(LCFLAGS) -o $@ $(RD_OBJS)
+	$(ECHO)echo LD $@
+	$(ECHO)$(CC) $(LDFLAGS) -o $@ $(RD_OBJS)
 
-clean:
-	@echo clean $(TARGET)
-	@rm -rf $(TARGET) *.o *.bak
+clean: SKCLI_CLEAN
+	$(ECHO)echo clean $(TARGET)
+	$(ECHO)rm -rf $(TARGET) *.o *.bak
 
-install:
-	@echo INSTALL $(RFP_TARGET)
-	@install -p -D -m 0755 $(RFP_TARGET) $(INST_BIN_D)/$(RFP_TARGET)
-	@$(STRIP) $(INST_BIN_D)/$(RFP_TARGET)
-	@echo INSTALL $(RFC_TARGET)
-	@install -p -D -m 0755 $(RFC_TARGET) $(INST_BIN_D)/$(RFC_TARGET)
-	@$(STRIP) $(INST_BIN_D)/$(RFC_TARGET)
-	@echo INSTALL $(RFP_SHELL)
-	@install -p -D -m 0755 $(RFP_SHELL) $(INST_ETC_D)/init.d/$(RFP_SHELL)
-	@echo INSTALL $(RFP_S_SHELL)
-	@install -d $(INST_ETC_D)/rc5.d
-	@ln -sf ../init.d/$(RFP_SHELL) $(INST_ETC_D)/rc5.d/$(RFP_S_SHELL)
+install: SKCLI_INSTALL
+	$(ECHO)echo INSTALL $(RFP_TARGET)
+	$(ECHO)install -p -D -m 0755 $(RFP_TARGET) $(INST_BIN_D)/$(RFP_TARGET)
+	$(ECHO)$(STRIP) $(INST_BIN_D)/$(RFP_TARGET)
+	$(ECHO)echo INSTALL $(RFC_TARGET)
+	$(ECHO)install -p -D -m 0755 $(RFC_TARGET) $(INST_BIN_D)/$(RFC_TARGET)
+	$(ECHO)$(STRIP) $(INST_BIN_D)/$(RFC_TARGET)
+	$(ECHO)echo INSTALL $(RFP_SHELL)
+	$(ECHO)install -p -D -m 0755 $(RFP_SHELL) $(INST_ETC_D)/init.d/$(RFP_TARGET)
+	$(ECHO)echo INSTALL $(RFP_S_SHELL)
+	$(ECHO)install -d $(INST_ETC_D)/rc5.d
+	$(ECHO)ln -sf ../init.d/$(RFP_TARGET) $(INST_ETC_D)/rc5.d/$(RFP_S_SHELL)
 
 %.o: %.c $(RF_HEADER)
-	@echo CC $@
-	@$(CC) $(CFLAGS) -c -o $@ $< 2>&1 > /dev/null
+	$(ECHO)echo CC $@
+	$(ECHO)$(CC) $(CFLAGS) -c -o $@ $< 2>&1 > /dev/null
 
-.PHONY: all install clean release
+include Makefile.sockcli
+
+.PHONY: all install clean release SKCLI_ALL SKCLI_INSTALL SKCLI_CLEAN

@@ -84,7 +84,7 @@ int open_rf433(char *dev)
 
     fd = open(dev, O_RDWR);
     if (fd == -1) {
-        sys_printf(SYS_ERR, "open_rf433(%s) Error: %s\n", dev, strerror(errno));
+        app_printf(SYS_ERR, "open_rf433(%s) Error: %s\n", dev, strerror(errno));
         return -1;
     }
 
@@ -104,7 +104,7 @@ int open_socket(void)
 
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd == -1) {
-        sys_printf(SYS_ERR, "socket() error: %s", strerror(errno));
+        app_printf(SYS_ERR, "socket() error: %s", strerror(errno));
         return -1;
     }
 
@@ -125,9 +125,9 @@ void set_non_blk(int fd)
 		if (errno == ENODEV) {
 			/* Some devices (like /dev/null redirected in)
 			 * can't be set to non-blocking */
-			sys_printf(SYS_DEBUG, "ignoring ENODEV for setnonblocking");
+			app_printf(SYS_DEBUG, "ignoring ENODEV for setnonblocking");
 		} else {
-			sys_printf(SYS_DEBUG, "Couldn't set nonblocking");
+			app_printf(SYS_DEBUG, "Couldn't set nonblocking");
 		}
 	}
 }
@@ -135,17 +135,17 @@ void set_non_blk(int fd)
 /*****************************************************************************
 * Function Name  : set_socket_opt
 * Description    : set the socket config
-* Input          : int
+* Input          : int, uint16_t
 * Output         : None
 * Return         : int
 *****************************************************************************/
-int set_socket_opt(int fd, uint16_t lport, struct in_addr sip, uint16_t sport)
+int set_socket_opt(int fd, uint16_t lport)
 {
     struct sockaddr_in srvaddr;
     int val = 1;
     int ret = 0;
 
-    set_non_blk(fd);
+    //set_non_blk(fd);
 
     ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
 
@@ -156,13 +156,10 @@ int set_socket_opt(int fd, uint16_t lport, struct in_addr sip, uint16_t sport)
 
     ret = bind(fd, (struct sockaddr*)&srvaddr, sizeof(srvaddr));
     if (ret == -1) {
-        sys_printf(SYS_ERR, "open_socket() error: %s", strerror(errno));
+        app_printf(SYS_ERR, "open_socket() error: %s", strerror(errno));
         return -1;
     }
-
     TRACE("%-20s: %d", "sockopt.local_port", lport);
-    TRACE("%-20s: %s", "sockopt.server_ip", inet_ntoa(sip));
-    TRACE("%-20s: %d", "sockopt.server_port", sport);
 
     return ret;
 }
@@ -262,18 +259,18 @@ se433_list *se433_add(se433_head *head, uint32_t addr)
 
 
     if (head->num >= RF433_SE433_MAX) {
-        sys_printf(SYS_ERR, "se433 list full");
+        app_printf(SYS_ERR, "se433 list full");
         return NULL;
     }
 
     if ((se433l = se433_find(head, addr)) != NULL) {
-        sys_printf(SYS_WARNING, "se433 0x%x duplicate", addr);
+        app_printf(SYS_WARNING, "se433 0x%x duplicate", addr);
         return se433l;
     }
 
     se433l = (se433_list*)malloc(sizeof(se433_list));
     if (se433l == NULL) {
-        sys_printf(SYS_ERR, "new se433 list memory error");
+        app_printf(SYS_ERR, "new se433 list memory error");
         return NULL;
     }
     memset((char*)se433l, 0, sizeof(se433_list));
@@ -285,7 +282,7 @@ se433_list *se433_add(se433_head *head, uint32_t addr)
     list_add(&se433l->list, &head->list);
     head->num++;
 
-    sys_printf(SYS_DEBUG, "se433_add 0x%08x\n", se433l->se433.addr);
+    app_printf(SYS_DEBUG, "se433_add 0x%08x\n", se433l->se433.addr);
 
     return se433l;
 }
@@ -306,14 +303,14 @@ int se433_del(se433_head *head, uint32_t addr)
             list_del(&se433l->list);
             head->num--;
 
-            sys_printf(SYS_DEBUG, "se433_del 0x%08x\n", se433l->se433.addr);
+            app_printf(SYS_DEBUG, "se433_del 0x%08x\n", se433l->se433.addr);
 
             free(se433l);
             return 0;
         }
     }
 
-    sys_printf(SYS_WARNING, "cannot find se433 %d to del\n", addr);
+    app_printf(SYS_WARNING, "cannot find se433 %d to del\n", addr);
 
     return -1;
 }
@@ -335,7 +332,7 @@ void se433_list_show(se433_head *head)
     se433_list *se433l;
 
     list_for_each_entry(se433l, &head->list, list) {
-        sys_printf(SYS_DEBUG, "addr=0x%08x, data=%.3f, req_cnt=%d, rsp_cnt=%d\n",
+        app_printf(SYS_DEBUG, "addr=0x%08x, data=%.3f, req_cnt=%d, rsp_cnt=%d\n",
                 se433l->se433.addr,
                 se433l->se433.data.data,
                 se433l->se433.req_cnt,
@@ -552,12 +549,12 @@ int rswp433_data_rsp(rswp433_pkg *pkg, rf433_instence *rf433x, buffer *buf)
     /* update new data to se433 */
     se433l = se433_find(&rf433x->se433, pkg->u.data_content.src_addr);
     if (se433l == NULL) {
-        sys_printf(SYS_WARNING, "cannot find se433 %d to add data\n", pkg->u.data_content.src_addr);
+        app_printf(SYS_WARNING, "cannot find se433 %d to add data\n", pkg->u.data_content.src_addr);
         return -1;
     }
 
     if (se433l->state != SE433_STATE_POLL_REQ) {
-        sys_printf(SYS_WARNING, "se433 state error got(%d) want(%d)\n",
+        app_printf(SYS_WARNING, "se433 state error got(%d) want(%d)\n",
                 se433l->state, SE433_STATE_POLL_REQ);
         return -1;
     }
@@ -568,7 +565,7 @@ int rswp433_data_rsp(rswp433_pkg *pkg, rf433_instence *rf433x, buffer *buf)
     memcpy(&se433l->se433.data, &pkg->u.data_content.data, sizeof(rswp433_data));
     //se433_data_add(se433l, &pkg->u.data_content.data);
 
-    sys_printf(SYS_DEBUG, "poll response dest_addr=0x%08x, src_addr=0x%08x, data=%.2f\n",
+    app_printf(SYS_DEBUG, "poll response dest_addr=0x%08x, src_addr=0x%08x, data=%.2f\n",
             pkg->u.content.dest_addr,
             pkg->u.content.src_addr,
             pkg->u.data_content.data.data);
@@ -614,7 +611,7 @@ int rswp433_pkg_analysis(buffer *buf, rswp433_pkg *pkg)
 
                 } else {
                     /* crc2 check error */
-                    sys_printf(SYS_DEBUG, "check rcr2 error 0x%02x\n", ret);
+                    app_printf(SYS_DEBUG, "check rcr2 error 0x%02x\n", ret);
 
                     /* rswp433 package content crc error, discard all package */
                     return 0;
@@ -622,7 +619,7 @@ int rswp433_pkg_analysis(buffer *buf, rswp433_pkg *pkg)
 
             } else {
                 /* crc1 check error */
-                sys_printf(SYS_DEBUG, "check crc1 error 0x%02x\n", ret);
+                app_printf(SYS_DEBUG, "check crc1 error 0x%02x\n", ret);
 
                 /* skip 2 byte */
                 i = i + 1;

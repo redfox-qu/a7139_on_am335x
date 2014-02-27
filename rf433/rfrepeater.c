@@ -8,6 +8,7 @@
 // History:
 //      <author>            <time>      <version>   <desc>
 //      redfox.qu@qq.com    2013/12/25  1.0.0       create this file
+//      redfox.qu@qq.com    2014/2/11   1.1.0       use udp-socket replace msg for IPC
 //
 // TODO:
 //      2013/12/31          add the common and debug
@@ -57,8 +58,6 @@ extern int loglevel;
 extern int debug_mode;
 extern int exitflag;
 
-static int server_msg_qid;
-static int client_msg_qid;
 rf433_instence rf433i;
 int spipefd[RF433_THREAD_MAX];
 
@@ -108,35 +107,56 @@ int load_config(void)
     /* get server ip address */
     if ((val = nvram_get(NVRAM_TYPE_NVRAM, RF433_NVR_SRV_IP)) != NULL) {
         if (get_ip(val, &rf433i.socket.server_ip) < 0) {
-            sys_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_SRV_IP);
+            app_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_SRV_IP);
         }
+    } else {
+        app_printf(SYS_ERR, "failed to get %s's value and set to it's default value %s",
+                RF433_NVR_SRV_IP, inet_ntoa(rf433i.socket.server_ip));
     }
 
     /* get server udp port */
     if ((val = nvram_get(NVRAM_TYPE_NVRAM, RF433_NVR_UDP_PORT)) != NULL) {
         if (get_port(val, &rf433i.socket.server_port) < 0) {
-            sys_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_UDP_PORT);
+            app_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_UDP_PORT);
         }
+    } else {
+        app_printf(SYS_ERR, "failed to get %s's value and set to it's default value %d",
+                RF433_NVR_UDP_PORT, rf433i.socket.server_port);
     }
 
     /* get rf433 wireless net id */
     if ((val = nvram_get(NVRAM_TYPE_NVRAM, RF433_NVR_NET_ID)) != NULL) {
         if (get_netid(val, &rf433i.rf433.net_id) < 0) {
-            sys_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_NET_ID);
+            app_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_NET_ID);
         }
+    } else {
+        app_printf(SYS_ERR, "failed to get %s's value and set to it's default value %d",
+                RF433_NVR_NET_ID, RF433_NET_ID(rf433i.rf433.net_id));
     }
 
     /* get rf433 wireless recveive address */
     if ((val = nvram_get(NVRAM_TYPE_NVRAM, RF433_NVR_LOCAL_ADDR)) != NULL) {
         if (get_local_addr(val, &rf433i.rf433.local_addr) < 0) {
-            sys_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_LOCAL_ADDR);
+            app_printf(SYS_ERR, "val %s for %s invalid", val, RF433_NVR_LOCAL_ADDR);
         }
+    } else {
+        app_printf(SYS_ERR, "failed to get %s's value and set to it's default value 0x%08x",
+                RF433_NVR_LOCAL_ADDR, rf433i.rf433.local_addr);
     }
+
+    app_printf(SYS_INFO, "parameters are as follows: "
+            "%s=%s, %s=%d, %s=%d, %s=0x%08x",
+            RF433_NVR_SRV_IP, inet_ntoa(rf433i.socket.server_ip),
+            RF433_NVR_UDP_PORT, rf433i.socket.server_port,
+            RF433_NVR_NET_ID, RF433_NET_ID(rf433i.rf433.net_id),
+            RF433_NVR_LOCAL_ADDR, rf433i.rf433.local_addr);
 
     TRACE("%-20s: 0x%04x", "netid", rf433i.rf433.net_id);
     TRACE("%-20s: 0x%08x", "local_addr", rf433i.rf433.local_addr);
     TRACE("%-20s: %s", "server_ip", inet_ntoa(rf433i.socket.server_ip));
     TRACE("%-20s: %d", "server_port", rf433i.socket.server_port);
+
+    app_printf(SYS_INFO, "initialized successfully.");
 
     return 0;
 }
@@ -161,7 +181,7 @@ int save_config(void)
     snprintf(buff, 32, "%d", RF433_NET_ID(rf433i.rf433.net_id));
     nvram_set(NVRAM_TYPE_NVRAM, RF433_NVR_NET_ID, buff);
 
-    snprintf(buff, 32, "%x", rf433i.rf433.local_addr);
+    snprintf(buff, 32, "0x%x", rf433i.rf433.local_addr);
     nvram_set(NVRAM_TYPE_NVRAM, RF433_NVR_LOCAL_ADDR, buff);
 
     nvram_commit(NVRAM_TYPE_NVRAM);
@@ -193,31 +213,31 @@ int relay_rf433(rf433_instence *rf433x)
 
     rf433_rbuf = buf_new_max();
     if (rf433_rbuf == NULL) {
-        sys_printf(SYS_ERR, "new rf433_rbuf memory error");
+        app_printf(SYS_ERR, "new rf433_rbuf memory error");
         goto out;
     }
 
     rf433_wbuf = buf_new_max();
     if (rf433_wbuf == NULL) {
-        sys_printf(SYS_ERR, "new rf433_wbuf memory error");
+        app_printf(SYS_ERR, "new rf433_wbuf memory error");
         goto out;
     }
 
     udp_rbuf = buf_new_max();
     if (udp_rbuf == NULL) {
-        sys_printf(SYS_ERR, "new udp_rbuf memory error");
+        app_printf(SYS_ERR, "new udp_rbuf memory error");
         goto out;
     }
 
     udp_wbuf = buf_new_max();
     if (udp_wbuf == NULL) {
-        sys_printf(SYS_ERR, "new udp_wbuf memory error");
+        app_printf(SYS_ERR, "new udp_wbuf memory error");
         goto out;
     }
 
     pkg = rswp433_pkg_new();
     if (pkg == NULL) {
-        sys_printf(SYS_ERR, "new rswp433_pkg memory error");
+        app_printf(SYS_ERR, "new rswp433_pkg memory error");
         goto out;
     }
 
@@ -232,8 +252,13 @@ int relay_rf433(rf433_instence *rf433x)
         FD_ZERO(&wset);
 
         /* caculate the delay timer */
-        time.tv_sec = RF433_SE433_MAX / (rf433x->se433.num == 0 ? 1 : rf433x->se433.num);
-        time.tv_usec = 0;
+        if (debug_mode) {
+            time.tv_sec = 5;
+            time.tv_usec = 0;
+        } else {
+            time.tv_sec = RF433_SE433_MAX / (rf433x->se433.num == 0 ? 1 : rf433x->se433.num);
+            time.tv_usec = 0;
+        }
 
         /*
          * check pipe read for main process signal
@@ -270,7 +295,7 @@ int relay_rf433(rf433_instence *rf433x)
             if (errno == EAGAIN || errno == EINTR)
                 continue;
 
-            sys_printf(SYS_ERR, "relay_rf433():select error:%s", strerror(errno));
+            app_printf(SYS_ERR, "relay_rf433():select error:%s", strerror(errno));
 
             /* exit the thread */
             goto out;
@@ -288,7 +313,7 @@ int relay_rf433(rf433_instence *rf433x)
             /* remove offline se433 in the list */
             se433l = se433_find_offline(&rf433x->se433);
             if (se433l != NULL) {
-                sys_printf(SYS_WARNING, "se433 0x%08x offline, req_cnt=%d, rsp_cnt=%d",
+                app_printf(SYS_INFO, "se433 0x%08x offline, req_cnt=%d, rsp_cnt=%d",
                         se433l->se433.addr, se433l->se433.req_cnt, se433l->se433.rsp_cnt);
                 se433_del(&rf433x->se433, se433l->se433.addr);
             }
@@ -296,7 +321,7 @@ int relay_rf433(rf433_instence *rf433x)
             /* request new data for the earliest se433 */
             se433l = se433_find_earliest(&rf433x->se433);
             if (se433l == NULL) {
-                sys_printf(SYS_NOTICE, "can not find the earliest se433");
+                app_printf(SYS_DEBUG, "can not find the earliest se433");
                 continue;
             }
 
@@ -312,7 +337,7 @@ int relay_rf433(rf433_instence *rf433x)
         if (FD_ISSET(rf433x->pipe_fd, &rset)) {
             char x;
 
-            sys_printf(SYS_INFO, "got main process write pipe signal");
+            app_printf(SYS_INFO, "got main process write pipe signal");
 
             while (read(rf433x->pipe_fd, &x, 1) > 0) {}
 
@@ -328,20 +353,20 @@ int relay_rf433(rf433_instence *rf433x)
             ret = buf_read(rf433x->rf433_fd, rf433_rbuf);
 
             if (ret == -1) {
-                sys_printf(SYS_ERR, "read(rf433_fd) error: %s", strerror(errno));
+                app_printf(SYS_ERR, "read(rf433_fd) error: %s", strerror(errno));
 
                 /* exit the thread */
                 goto out;
 
             } else if (ret == 0) {
                 /* maybe error */
-                sys_printf(SYS_ERR, "read(rf433_fd) closed");
+                app_printf(SYS_ERR, "read(rf433_fd) closed");
 
                 /* exit the thread */
                 goto out;
 
             } else {
-                sys_printf(SYS_INFO, "read %d bytes from 433", ret);
+                app_printf(SYS_DEBUG, "read %d bytes from 433", ret);
 
                 /* next process data from rf433 rbuf */
                 MS(0, 0, 0, 0, 1);
@@ -356,13 +381,13 @@ int relay_rf433(rf433_instence *rf433x)
             ret = buf_write(rf433x->rf433_fd, rf433_wbuf);
 
             if (ret == -1) {
-                sys_printf(SYS_ERR, "write() error: %s", strerror(errno));
+                app_printf(SYS_ERR, "write() error: %s", strerror(errno));
 
                 /* exit the thread */
                 goto out;
 
             } else {
-                sys_printf(SYS_INFO, "write %d bytes to 433", ret);
+                app_printf(SYS_DEBUG, "write %d bytes to 433", ret);
 
                 /* next read data to rf433 rbuf */
                 MS(1, 0, 0, 0, 0);
@@ -411,7 +436,7 @@ int relay_rf433(rf433_instence *rf433x)
 
         /* write to udp */
         if (FD_ISSET(rf433x->sock_fd, &wset)) {
-            int len;
+            socklen_t len;
             struct sockaddr_in cliaddr;
 
             TRACE("sock_fd can be write\n");
@@ -430,13 +455,13 @@ int relay_rf433(rf433_instence *rf433x)
             */
 
             if (ret == -1) {
-                sys_printf(SYS_ERR, "write(udp_fd) error: %s", strerror(errno));
+                app_printf(SYS_ERR, "write(udp_fd) error: %s", strerror(errno));
 
                 /* exit the thread */
                 goto out;
 
             } else {
-                sys_printf(SYS_INFO, "write %d bytes to UDP %s:%d", ret,
+                app_printf(SYS_DEBUG, "write %d bytes to UDP %s:%d", ret,
                         inet_ntoa(rf433x->socket.server_ip), rf433x->socket.server_port);
 
                 /* next read data to rf433 rbuf */
@@ -466,7 +491,7 @@ int relay_rf433(rf433_instence *rf433x)
                         /* check the address */
                         if (pkg->u.content.dest_addr != RF433_RCVADDR_MAX) {
 
-                            sys_printf(SYS_WARNING, "0x%08x is not register addr, drop this packet\n",
+                            app_printf(SYS_WARNING, "0x%08x is not register addr, drop this packet\n",
                                 pkg->u.content.dest_addr);
 
                             /* next read data to rf433 rbuf */
@@ -477,6 +502,9 @@ int relay_rf433(rf433_instence *rf433x)
 
                             /* first register the se433 */
                             if ((se433l = rswp433_reg_req(pkg, rf433x)) != NULL) {
+
+                                /* log the message */
+                                app_printf(SYS_INFO, "se433 0x%08x online\n", se433l->se433.addr);
 
                                 /* second, response the reg_ok message to se433 */
                                 rswp433_reg_rsp(se433l, rf433x, rf433_wbuf);
@@ -498,7 +526,7 @@ int relay_rf433(rf433_instence *rf433x)
                         /* check if my address */
                         if (pkg->u.content.dest_addr != rf433x->rf433.local_addr) {
 
-                            sys_printf(SYS_WARNING, "0x%08x is not my addr, drop this packet\n",
+                            app_printf(SYS_WARNING, "0x%08x is not my addr, drop this packet\n",
                                 pkg->u.content.dest_addr);
 
                             /* next read data to rf433 rbuf */
@@ -580,18 +608,19 @@ void *rf433_repeater_job(void *p)
 
         rf433x->rf433_fd = open_rf433(RF433_RF_DEV_NAME);
         if (rf433x->rf433_fd == -1) {
-            sys_printf(SYS_ERR, "open_rf433 error");
+            app_printf(SYS_ERR, "open_rf433 error");
             pthread_exit((void*)1);
         }
         set_rf433_opt(rf433x->rf433_fd, rf433x->rf433.net_id, rf433x->rf433.rate);
 
         rf433x->sock_fd = open_socket();
         if (rf433x->sock_fd == -1) {
-            sys_printf(SYS_ERR, "open_socket error");
+            app_printf(SYS_ERR, "open_socket error");
             pthread_exit((void*)1);
         }
-        set_socket_opt(rf433x->sock_fd, rf433x->socket.local_port,
-                rf433x->socket.server_ip, rf433x->socket.server_port);
+        set_socket_opt(rf433x->sock_fd, rf433x->socket.local_port);
+        TRACE("%-20s: %s", "sockopt.server_ip", inet_ntoa(rf433x->socket.server_ip));
+        TRACE("%-20s: %d", "sockopt.server_port", rf433x->socket.server_port);
 
         relay_rf433(rf433x);
 
@@ -627,7 +656,7 @@ int thread_create(void)
     int childpipe[2];
 
     if (pipe(childpipe) < 0) {
-        sys_printf(SYS_ERR, "error creating rf433 daemon pipe");
+        app_printf(SYS_ERR, "error creating rf433 daemon pipe");
         return -1;
     }
 
@@ -639,11 +668,11 @@ int thread_create(void)
     err = pthread_create(&rf433i.tid, NULL, rf433_repeater_job, (void*)&rf433i);
 
     if (err == -1) {
-        sys_printf(SYS_ERR, "rfrepeater thread create faild!");
+        app_printf(SYS_ERR, "rfrepeater thread create faild!");
         return err;
     }
 
-    sys_printf(SYS_INFO, "rfrepeater tid %ld thread has started", (long)rf433i.tid);
+    app_printf(SYS_INFO, "rfrepeater tid %ld thread has started", (long)rf433i.tid);
 
     return 0;
 }
@@ -660,7 +689,7 @@ int thread_close(void)
 {
     int thread_ret = 0;
 
-    sys_printf(SYS_ALERT, "close the pthread tid is %ld", (long)rf433i.tid);
+    app_printf(SYS_ALERT, "close the pthread tid is %ld", (long)rf433i.tid);
 
     rf433i.status &= (~INST_START);
 
@@ -669,90 +698,13 @@ int thread_close(void)
     spipefd[0] = -1;
 
     thread_ret = pthread_join(rf433i.tid, NULL);
-    sys_printf(SYS_ALERT, "closed pthread %ld ret is %d",
+    app_printf(SYS_ALERT, "closed pthread %ld ret is %d",
             (long)rf433i.tid, thread_ret);
 
     rf433i.tid = 0;
     rf433i.pipe_fd = -1;
     rf433i.sock_fd = -1;
     rf433i.rf433_fd = -1;
-
-    return 0;
-}
-
-/*****************************************************************************
-* Function Name  : msg_to_read_config
-* Description    : receive message to read config
-* Input          : void
-* Output         : None
-* Return         : int
-*                  - 0:ok
-*****************************************************************************/
-int msg_to_read_config(void)
-{
-    return load_config();
-}
-
-/*****************************************************************************
-* Function Name  : msg_to_save_config
-* Description    : receive message to save config
-* Input          : void
-* Output         : None
-* Return         : int
-*                  - 0:ok
-*****************************************************************************/
-int msg_to_save_config(void)
-{
-    return save_config();
-}
-
-/*****************************************************************************
-* Function Name  : msg_to_get_config
-* Description    : receive message to get current config
-* Input          : message client id
-* Output         : None
-* Return         : int
-*                  - 0:ok
-*****************************************************************************/
-int msg_to_get_config(long client_pid)
-{
-    struct msg_st rf433_msg, sock_msg;
-
-    /* send rf433 config */
-    rf433_msg.mkey = client_pid;
-    rf433_msg.mtype = MSG_RSP_RF433;
-    memcpy(&rf433_msg.u.rf433, &rf433i.rf433, sizeof(rf433_cfg));
-    msgsnd(client_msg_qid, &rf433_msg, sizeof(rf433_msg) - sizeof(long), 0);
-
-    /* send socket config */
-    sock_msg.mkey = client_pid;
-    sock_msg.mtype = MSG_RSP_SOCKET;
-    memcpy(&sock_msg.u.socket, &rf433i.socket, sizeof(socket_cfg));
-    msgsnd(client_msg_qid, &sock_msg, sizeof(sock_msg) - sizeof(long), 0);
-
-    return 0;
-}
-
-/*****************************************************************************
-* Function Name  : msg_to_get_se433list
-* Description    : receive message to get se433 list data
-* Input          : message client id
-* Output         : None
-* Return         : int
-*                  - 0:ok
-*****************************************************************************/
-int msg_to_get_se433list(long client_pid)
-{
-    struct msg_st se433_msg;
-    se433_list *se433l;
-
-    /* send sensor 433 address and count */
-    list_for_each_entry(se433l, &rf433i.se433.list, list) {
-        se433_msg.mkey = client_pid;
-        se433_msg.mtype = MSG_RSP_SE433L;
-        memcpy(&se433_msg.u.se433data, &se433l->se433, sizeof(se433_data));
-        msgsnd(client_msg_qid, &se433_msg, sizeof(se433_msg) - sizeof(long), 0);
-    }
 
     return 0;
 }
@@ -766,31 +718,150 @@ int msg_to_get_se433list(long client_pid)
 *                  -  0:ok
 *                  - -1:error
 *****************************************************************************/
-int msg_to_resp(long client_pid, char *str, ...)
+int msg_to_resp(buffer *msg_wbuf, uint8_t ret, char *str, ...)
 {
-    struct msg_st resp_msg;
-    char tmpline[MSG_RESP_LEN];
+    struct msg_st *wmsg = (struct msg_st *)buf_data(msg_wbuf);
+    char tmpline[MSG_RESP_LEN] = "";
     va_list args;
-
-    memset(tmpline, 0, MSG_RESP_LEN);
 
     va_start(args, str);
     vsnprintf(tmpline, MSG_RESP_LEN - 1, str, args);
     va_end(args);
 
-    sys_printf(SYS_DEBUG, "response for the message");
+    app_printf(SYS_DEBUG, "response for the message");
 
-    resp_msg.mkey = client_pid;
-    resp_msg.mtype = MSG_RSP_END;
+    buf_clean(msg_wbuf);
 
-    memset(resp_msg.u.resp, 0, MSG_RESP_LEN);
-    strncpy(resp_msg.u.resp, tmpline, MSG_RESP_LEN-1);
+    wmsg->h.magic[0] = MSG_CTL_MAGIC_0;
+    wmsg->h.magic[1] = MSG_CTL_MAGIC_1;
+    wmsg->h.flags = 0;
+    wmsg->h.version = MSG_CTL_VERSION;
 
-    if (msgsnd(client_msg_qid, &resp_msg, sizeof(resp_msg) - sizeof(long), 0) == -1) {
+    wmsg->d.type = MSG_RSP_END;
+    wmsg->d.content[0] = ret;
+
+    buf_incrlen(msg_wbuf, sizeof(struct msg_head) + 5);
+
+    buf_append(msg_wbuf, tmpline, strlen(tmpline));
+
+    return 0;
+}
+
+/*****************************************************************************
+* Function Name  : msg_to_read_config
+* Description    : receive message to read config
+* Input          : void
+* Output         : None
+* Return         : int
+*                  - 0:ok
+*****************************************************************************/
+int msg_to_read_config(buffer *msg_rbuf, buffer *msg_wbuf)
+{
+    int ret;
+
+    thread_close();
+
+    ret = load_config();
+
+    if (ret < 0) {
+        app_printf(SYS_ALERT, "read config error, use default config");
+        default_init();
+    }
+
+    if (thread_create()) {
+        msg_to_resp(msg_wbuf, MSG_RET_ERR, "restart thread error");
         return -1;
     }
 
-    sys_printf(SYS_DEBUG, "send the response ok");
+    msg_to_resp(msg_wbuf, MSG_RET_OK, "");
+
+    return ret;
+}
+
+/*****************************************************************************
+* Function Name  : msg_to_save_config
+* Description    : receive message to save config
+* Input          : void
+* Output         : None
+* Return         : int
+*                  - 0:ok
+*****************************************************************************/
+int msg_to_save_config(buffer *msg_rbuf, buffer *msg_wbuf)
+{
+    int ret;
+
+    ret = save_config();
+
+    msg_to_resp(msg_wbuf, MSG_RET_OK, "");
+
+    return ret;
+}
+
+/*****************************************************************************
+* Function Name  : msg_to_get_config
+* Description    : receive message to get current config
+* Input          : message client id
+* Output         : None
+* Return         : int
+*                  - 0:ok
+*****************************************************************************/
+int msg_to_get_config(buffer *msg_rbuf, buffer *msg_wbuf)
+{
+    struct msg_st *wmsg = (struct msg_st *)buf_data(msg_wbuf);
+    struct msg_config *cfg;
+
+    buf_clean(msg_wbuf);
+
+    wmsg->h.magic[0] = MSG_CTL_MAGIC_0;
+    wmsg->h.magic[1] = MSG_CTL_MAGIC_1;
+    wmsg->h.flags = 0;
+    wmsg->h.version = MSG_CTL_VERSION;
+
+    wmsg->d.type = MSG_RSP_GET_CFG;
+    wmsg->d.content[0] = MSG_RET_OK;
+
+    buf_incrlen(msg_wbuf, sizeof(struct msg_head) + 5);
+
+    cfg = (struct msg_config *)(&wmsg->d.content[1]);
+    memcpy(&cfg->socket, &rf433i.socket, sizeof(cfg->socket));
+    memcpy(&cfg->rf433, &rf433i.rf433, sizeof(cfg->rf433));
+
+    buf_incrlen(msg_wbuf, sizeof(cfg->socket) + sizeof(cfg->rf433));
+
+    return 0;
+}
+
+/*****************************************************************************
+* Function Name  : msg_to_get_se433list
+* Description    : receive message to get se433 list data
+* Input          : message client id
+* Output         : None
+* Return         : int
+*                  - 0:ok
+*****************************************************************************/
+int msg_to_get_se433list(buffer *msg_rbuf, buffer *msg_wbuf)
+{
+    struct msg_st *wmsg = (struct msg_st *)buf_data(msg_wbuf);
+    se433_list *se433l;
+
+    buf_clean(msg_wbuf);
+
+    wmsg->h.magic[0] = MSG_CTL_MAGIC_0;
+    wmsg->h.magic[1] = MSG_CTL_MAGIC_1;
+    wmsg->h.flags = 0;
+    wmsg->h.version = MSG_CTL_VERSION;
+
+    wmsg->d.type = MSG_RSP_GET_SE433L;
+    wmsg->d.content[0] =  MSG_RET_OK;
+    wmsg->d.content[1] = 0;
+
+    buf_incrlen(msg_wbuf, sizeof(struct msg_head) + 6);
+
+    /* send sensor 433 address and count */
+    list_for_each_entry(se433l, &rf433i.se433.list, list) {
+        wmsg->d.content[1]++;
+        buf_append(msg_wbuf, (char*)&se433l->se433, sizeof(se433_data));
+    }
 
     return 0;
 }
@@ -803,36 +874,41 @@ int msg_to_resp(long client_pid, char *str, ...)
 * Return         : int
 *                  -  0:ok
 *****************************************************************************/
-int msg_to_rf433(rf433_cfg *rf433)
+int msg_to_set_cfg(buffer *msg_rbuf, buffer *msg_wbuf)
 {
-    if (rf433->m_mask & RF433_MASK_NET_ID) {
-        rf433i.rf433.net_id = rf433->net_id;
+    struct msg_st *rmsg = (struct msg_st *)buf_data(msg_rbuf);
+
+    struct msg_config *cfg = (struct msg_config *)&rmsg->d.content[0];
+
+    thread_close();
+
+    /* set the rf433 config */
+    if (cfg->rf433.m_mask & RF433_MASK_NET_ID) {
+        app_printf(SYS_INFO, "set netid to %d", RF433_NET_ID(cfg->rf433.net_id));
+        rf433i.rf433.net_id = cfg->rf433.net_id;
     }
 
-    if (rf433->m_mask & RF433_MASK_RCV_ADDR) {
-        rf433i.rf433.local_addr = rf433->local_addr;
+    if (cfg->rf433.m_mask & RF433_MASK_RCV_ADDR) {
+        app_printf(SYS_INFO, "set local_addr to 0x%08x", cfg->rf433.local_addr);
+        rf433i.rf433.local_addr = cfg->rf433.local_addr;
     }
 
-    return 0;
-}
-
-/*****************************************************************************
-* Function Name  : msg_to_socket
-* Description    : receive message to set socket config
-* Input          : socket_cfg*
-* Output         : None
-* Return         : int
-*                  -  0:ok
-*****************************************************************************/
-int msg_to_socket(socket_cfg *socket)
-{
-    if (socket->m_mask & SOCK_MASK_SER_IP) {
-        rf433i.socket.server_ip = socket->server_ip;
+    /* set the socket config */
+    if (cfg->socket.m_mask & SOCK_MASK_SER_IP) {
+        app_printf(SYS_INFO, "set server_ip to %s", inet_ntoa(cfg->socket.server_ip));
+        rf433i.socket.server_ip = cfg->socket.server_ip;
     }
 
-    if (socket->m_mask & SOCK_MASK_UDP_PORT) {
-        rf433i.socket.server_port = socket->server_port;
+    if (cfg->socket.m_mask & SOCK_MASK_UDP_PORT) {
+        app_printf(SYS_INFO, "set server_port to %d", cfg->socket.server_port);
+        rf433i.socket.server_port = cfg->socket.server_port;
     }
+
+    if (thread_create()) {
+        msg_to_resp(msg_wbuf, MSG_RET_OK, "restart thread error");
+        return -1;
+    }
+    msg_to_resp(msg_wbuf, MSG_RET_OK, "");
 
     return 0;
 }
@@ -845,21 +921,35 @@ int msg_to_socket(socket_cfg *socket)
 * Return         : int
 *                  -  0:ok
 *****************************************************************************/
-int msg_to_se433(se433_cfg *se433)
+int msg_to_se433(buffer *msg_rbuf, buffer *msg_wbuf)
 {
+    struct msg_st *rmsg = (struct msg_st *)buf_data(msg_rbuf);
+    se433_cfg *se433 = (se433_cfg *)&rmsg->d.content[0];
+    uint8_t ret;
+
     switch (se433->op) {
         case SE433_OP_ADD:
-            return (se433_add(&rf433i.se433, se433->se433_addr) ? 0 : -1);
+            if (se433_add(&rf433i.se433, se433->se433_addr)) {
+                ret = MSG_RET_OK;
+            } else {
+                ret = MSG_RET_ERR;
+            }
             break;
 
         case SE433_OP_DEL:
-            return se433_del(&rf433i.se433, se433->se433_addr);
+            if (se433_del(&rf433i.se433, se433->se433_addr) < 0) {
+                ret = MSG_RET_OK;
+            } else {
+                ret = MSG_RET_ERR;
+            }
             break;
 
         default:
-            sys_printf(SYS_ERR, "se433 op %d unsupport", se433->op);
+            app_printf(SYS_ERR, "se433 op %d unsupport", se433->op);
+            ret = MSG_RET_ERR;
             return -1;
     }
+    msg_to_resp(msg_wbuf, ret, "");
 
     return 0;
 }
@@ -872,9 +962,83 @@ int msg_to_se433(se433_cfg *se433)
 * Return         : int
 *                  -  0:ok
 *****************************************************************************/
-int msg_to_log_level(uint32_t log)
+int msg_to_log_level(buffer *msg_rbuf, buffer *msg_wbuf)
 {
+    struct msg_st *rmsg = (struct msg_st *)buf_data(msg_rbuf);
+    uint32_t log = (uint32_t)rmsg->d.content[0];
+
+    app_printf(SYS_INFO, "set loglevel to %d", log);
     set_loglevel(log);
+
+    msg_to_resp(msg_wbuf, MSG_RET_OK, "");
+
+    return 0;
+}
+
+
+int msg_process(buffer *msg_rbuf, buffer *msg_wbuf)
+{
+    struct msg_st *rmsg;
+
+    rmsg = (struct msg_st *)buf_data(msg_rbuf);
+
+    switch (rmsg->d.type) {
+
+        case MSG_REQ_SET_CFG:
+            app_printf(SYS_INFO, "MSG_REQ_SET_CFG");
+            if (msg_to_set_cfg(msg_rbuf, msg_wbuf) < 0) {
+                app_printf(SYS_ERR, "msg_to_rf433 error");
+            }
+            break;
+
+        case MSG_REQ_GET_CFG:
+            app_printf(SYS_INFO, "MSG_REQ_GET_CFG");
+            if (msg_to_get_config(msg_rbuf, msg_wbuf) == -1) {
+                app_printf(SYS_ERR, "msg_to_get_config error");
+            }
+            break;
+
+        case MSG_REQ_READ_CFG:
+            app_printf(SYS_INFO, "MSG_REQ_READ_CFG");
+            if (msg_to_read_config(msg_rbuf, msg_wbuf) < 0) {
+                app_printf(SYS_ERR, "msg_to_read_config error");
+            }
+            break;
+
+        case MSG_REQ_SAVE_CFG:
+            app_printf(SYS_INFO, "MSG_REQ_SAVE_CFG");
+            if (msg_to_save_config(msg_rbuf, msg_wbuf) < 0) {
+                app_printf(SYS_ERR, "msg_to_save_config error");
+            }
+            break;
+
+        case MSG_REQ_SET_LOG:
+            app_printf(SYS_INFO, "MSG_REQ_SET_LOG");
+            if (msg_to_log_level(msg_rbuf, msg_wbuf) == -1) {
+                app_printf(SYS_ERR, "msg_to_se433 error");
+            }
+            break;
+
+        case MSG_REQ_SET_SE433:
+            app_printf(SYS_INFO, "MSG_REQ_SET_SE433");
+            if (msg_to_se433(msg_rbuf, msg_wbuf) == -1) {
+                app_printf(SYS_ERR, "msg_to_se433 error");
+            }
+            break;
+
+        case MSG_REQ_GET_SE433L:
+            app_printf(SYS_INFO, "MSG_RSP_SE433L");
+            if (msg_to_get_se433list(msg_rbuf, msg_wbuf) == -1) {
+                app_printf(SYS_ERR, "msg_to_get_se433list error");
+            }
+            break;
+
+        default:
+            app_printf(SYS_WARNING, "Unknown MSG command %ld", rmsg->d.type);
+            msg_to_resp(msg_wbuf, MSG_RET_CMD_NOSUPPORT, "");
+            break;
+    }
+
     return 0;
 }
 
@@ -888,9 +1052,9 @@ int msg_to_log_level(uint32_t log)
 static void sigintterm_handler(int UNUSED(unused)) {
 
 	exitflag = 1;
-    sys_printf(SYS_EMERG, "rfrepeater daemon shutdown");
+    app_printf(SYS_EMERG, "rfrepeater daemon shutdown");
     //remove(LOCKFILE);
-    exit(0);
+	exit(EXIT_FAILURE);
 }
 
 /*****************************************************************************
@@ -901,7 +1065,7 @@ static void sigintterm_handler(int UNUSED(unused)) {
 * Return         : void
 *****************************************************************************/
 static void sigsegv_handler(int UNUSED(unused)) {
-	sys_printf(SYS_EMERG, "Aiee, segfault! You should probably report "
+	app_printf(SYS_EMERG, "Aiee, segfault! You should probably report "
 			"this as a bug to the developer\n");
 	exit(EXIT_FAILURE);
 }
@@ -914,10 +1078,14 @@ static void sigsegv_handler(int UNUSED(unused)) {
 * Return         : int
 *                  -  0:ok
 *****************************************************************************/
-int main(int argc,char* argv[])
+int main(int argc, char *argv[])
 {
     int i, ret;
-    struct msg_st msg;
+    int ctl_fd, max_fd;
+    fd_set rset, wset;
+    buffer *ctl_rbuf, *ctl_wbuf;
+    socklen_t len;
+    struct sockaddr_in ctl_cli;
 
     for (i = 1; i < (unsigned int)argc; i++)
     {
@@ -939,12 +1107,11 @@ int main(int argc,char* argv[])
         }
     }
 
-
     if (debug_mode == 1) {
         set_loglevel(SYS_DEBUG);
     } else {
         set_loglevel(SYS_ERR);
-        openlog(RF433_LOG_F, 0, LOG_DAEMON);
+        app_openlog(RF433_LOG_F);
     }
 
     /* set up cleanup handler */
@@ -967,140 +1134,153 @@ int main(int argc,char* argv[])
         }
     }
 
-    sys_printf(SYS_ALERT, "rfrepeater daemon start");
+    app_printf(SYS_INFO, "rfrepeater daemon start");
     //atexit(exit_job);
     //make_pid_file();
 
     default_init();
 
-    server_msg_qid = msgget((key_t)SERVER_MSG, IPC_CREAT|0666);
-    if (server_msg_qid == -1) {
-        sys_printf(SYS_ERR, "msgget(server_msg_qid):%s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    client_msg_qid = msgget((key_t)CLIENT_MSG, IPC_CREAT|0666);
-    if (client_msg_qid == -1) {
-        sys_printf(SYS_ERR, "msgget(client_msg_qid):%s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-
     if (load_config()) {
-        sys_printf(SYS_INFO, "load_config() error, will use default config");
+        app_printf(SYS_WARNING, "load_config() error, will use default config");
     }
 
     if (thread_create()) {
-        sys_printf(SYS_ERR, "thread_create() error");
-        exit(EXIT_FAILURE);
+        app_printf(SYS_ERR, "thread_create() error");
+        goto out;
     }
+
+    ctl_rbuf = buf_new_max();
+    if (ctl_rbuf == NULL) {
+        app_printf(SYS_ERR, "new ctl_rbuf memory error");
+        goto out;
+    }
+
+    ctl_wbuf = buf_new_max();
+    if (ctl_wbuf == NULL) {
+        app_printf(SYS_ERR, "new ctl_wbuf memory error");
+        goto out;
+    }
+
+    ctl_fd = open_socket();
+    if (ctl_fd < 0) {
+        app_printf(SYS_ERR, "open ctl_fd error");
+        goto out;
+    }
+    set_socket_opt(ctl_fd, SRV_CTL_UDP_PORT);
 
     while (1)
     {
-        ret = msgrcv(server_msg_qid, &msg, sizeof(msg)-sizeof(long), 0, 0);
+        TRACE("poll the ctrl process\n");
+
+#ifdef SOCKCLI
+        FD_ZERO(&rset);
+        FD_ZERO(&wset);
+
+        max_fd = 0;
+        for (i = 0; i < RF433_THREAD_MAX; i++) {
+            FD_SET(spipefd[i], &rset);
+            max_fd = max(max_fd, spipefd[i]);
+        }
+
+        FD_SET(ctl_fd, &rset);
+        max_fd = max(max_fd, ctl_fd);
+
+        if (buf_is_used(ctl_wbuf)) {
+            FD_SET(ctl_fd, &wset);
+        }
+
+        ret = select(max_fd + 1, &rset, &wset, NULL, NULL);
+
         if (ret == -1) {
-            if (errno == EINTR) {
+            /* signal interrupt the select */
+            if (errno == EAGAIN || errno == EINTR) {
                 continue;
             }
-            sys_printf(SYS_ERR, "main():msgrcv():%d:%s", errno, strerror(errno));
-            break;
+
+            app_printf(SYS_ERR, "main():select error:%s", strerror(errno));
+
+            /* exit the thread */
+            goto out;
         }
 
-        switch (msg.mtype) {
+        if (FD_ISSET(ctl_fd, &rset)) {
 
-            case MSG_REQ_SET_RF433:
-                sys_printf(SYS_DEBUG, "MSG_REQ_SET_RF433");
-                thread_close();
-                if (msg_to_rf433(&msg.u.rf433) == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_rf433 error");
-                    //break;
-                }
-                if (thread_create()) {
-                    msg_to_resp(msg.mkey, "restart thread error");
-                    break;
-                }
-                msg_to_resp(msg.mkey, "");
-                break;
+            TRACE("ctl_fd can be read\n");
 
-            case MSG_REQ_SET_SOCK:
-                sys_printf(SYS_DEBUG, "MSG_REQ_SET_SOCK");
-                thread_close();
-                if (msg_to_socket(&msg.u.socket) == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_socket error");
-                    //break;
-                }
-                if (thread_create()) {
-                    msg_to_resp(msg.mkey, "restart thread error");
-                    break;
-                }
-                msg_to_resp(msg.mkey, "");
-                break;
+            len = sizeof(ctl_cli);
+            ret = recvfrom(ctl_fd, buf_data(ctl_rbuf), buf_space(ctl_rbuf), 0,
+                    (struct sockaddr*)&ctl_cli, &len);
 
-            case MSG_REQ_READ_CFG:
-                sys_printf(SYS_DEBUG, "MSG_REQ_READ_CFG");
-                thread_close();
-                if (msg_to_read_config() == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_read_config error");
-                    sys_printf(SYS_ALERT, "read config error, use default config");
-                    default_init();
-                }
-                if (thread_create()) {
-                    msg_to_resp(msg.mkey, "restart thread error");
-                    break;
-                }
-                msg_to_resp(msg.mkey, "");
-                break;
+            if (ret <= 0) {
+                /* maybe error */
+                app_printf(SYS_ERR, "read(ctl_fd) error: %s", strerror(errno));
 
-            case MSG_REQ_SAVE_CFG:
-                sys_printf(SYS_DEBUG, "MSG_REQ_SAVE_CFG");
-                if (msg_to_save_config() == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_save_config error");
-                    break;
-                }
-                msg_to_resp(msg.mkey, "");
-                break;
+                /* exit the thread */
+                goto out;
 
-            case MSG_REQ_GET_CFG:
-                sys_printf(SYS_DEBUG, "MSG_REQ_GET_CFG");
-                if (msg_to_get_config(msg.mkey) == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_get_config error");
-                    break;
-                }
-                msg_to_resp(msg.mkey, "");
-                break;
+            } else {
 
-            case MSG_REQ_GET_SE433L:
-                sys_printf(SYS_DEBUG, "MSG_RSP_SE433L");
-                if (msg_to_get_se433list(msg.mkey) == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_get_stat error");
-                    break;
-                }
-                msg_to_resp(msg.mkey, "");
-                break;
+                buf_incrlen(ctl_rbuf, ret);
 
-            case MSG_REQ_SET_SE433:
-                sys_printf(SYS_DEBUG, "MSG_REQ_SET_SE433");
-                if (msg_to_se433(&msg.u.se433) == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_se433 error");
+                TRACE("ctl_fd read %d bytes\n", ret);
+                if (debug_mode) {
+                    buf_dump(ctl_rbuf);
                 }
-                msg_to_resp(msg.mkey, "");
-                break;
 
-            case MSG_REQ_SET_LOG:
-                sys_printf(SYS_DEBUG, "MSG_REQ_SET_LOG");
-                if (msg_to_log_level(msg.u.msg_level) == -1) {
-                    msg_to_resp(msg.mkey, "msg_to_log_level error");
-                    break;
+                /* check message validate */
+                if (msg_check(ctl_rbuf) == 0) {
+
+                    /* process the command */
+                    msg_process(ctl_rbuf, ctl_wbuf);
+
+                } else {
+
+                    /* read invalid message */
+                    app_printf(SYS_WARNING, "got a invalid ctrl message\n");
+
                 }
-                msg_to_resp(msg.mkey, "");
-                break;
+            }
 
-            default:
-                sys_printf(SYS_DEBUG, "Unknown MSG command %ld", msg.mtype);
-                msg_to_resp(msg.mkey, "");
-                break;
+            buf_clean(ctl_rbuf);
         }
+
+        if (FD_ISSET(ctl_fd, &wset)) {
+
+            len = sizeof(ctl_cli);
+            ret = sendto(ctl_fd, buf_data(ctl_wbuf), buf_len(ctl_wbuf), 0,
+                    (struct sockaddr*)&ctl_cli, len);
+
+            if (ret <= 0) {
+                /* maybe error */
+                app_printf(SYS_ERR, "write(ctl_fd) error: %s", strerror(errno));
+
+                /* exit the thread */
+                goto out;
+            }
+
+            TRACE("ctl_fd write %d bytes\n", ret);
+            if (debug_mode) {
+                buf_dump(ctl_wbuf);
+            }
+
+            buf_clean(ctl_wbuf);
+        }
+
+        for (i = 0; i < RF433_THREAD_MAX; i++) {
+            if (FD_ISSET(spipefd[i], &rset)) {
+                /**
+                 * TODO:
+                 * proc pthread msg
+                 */
+            }
+        }
+#else
+        sleep(1);
+#endif
     }
 
-    sys_printf(SYS_INFO, "rf433 daemon terminaled!");
+out:
+    app_printf(SYS_INFO, "rf433 daemon terminaled!");
 
     exit(0);
 }
