@@ -20,9 +20,10 @@
 //                                                  3.modify freq_cal_tab[5]'s value, modify 480.001MHZ to 480.000MHZ
 //      yaobyron@gmail.com  2014/01/21  1.0.5       Fix bug: After the program is running, immediately received an invalid packet
 //                                                      Resolved: In the ioctl function, after switching to standby mode, waiting for some time
+//      yaobyron@gmail.com  2014/01/23  1.0.6       Fix bug#54: Sometimes equipment has not writable
+//                                                      Resolved: In the a7139_tasklet_func function, before the switch to rx mode, to determine whether the rx mode
+//      yaobyron@gmail.com  2014/02/11  1.1.0       modify tasklet to workqueue
 //
-// TODO:
-//      2013/12/31          add the common and debug
 //*******************************************************************************
 #include <linux/types.h>
 #include <linux/init.h>
@@ -40,6 +41,7 @@
 #include <linux/sched.h>
 #include <linux/poll.h>
 #include <asm/uaccess.h>
+#include <linux/workqueue.h>
 
 #include "a7139_rf.h"
 #include "a7139.h"
@@ -63,13 +65,14 @@
 //DELAY
 #define spi_ndelay(n)           ndelay(n)
 #define spi_mdelay(n)           mdelay(n)
-#define spi_defdelay()          spi_ndelay(60)
+#define spi_defdelay()          spi_ndelay(80)
 
+#define DEV_WRITE_TIMEOUT       1000       /* ms */
 #define DEVICE_NAME             "a7139"    /* device name, see it on /proc/devices */
 #define A7139_MAJOR             271        /* master device id */
 #define RF_BUFSIZE              64
 
-#define VERSION                 "1.0.4"
+#define VERSION                 "1.1.0"
 #define DEBUG
 #undef  DEBUG
 #ifdef  DEBUG
@@ -111,12 +114,13 @@ struct rf_dev {
     uint8_t tx_len;
 
     struct semaphore sem;
+    struct workqueue_struct *work_queue;
+    struct work_struct work;
     volatile uint32_t rf_txevt;
     volatile uint32_t rf_rxevt;
     uint32_t opencount;
     wait_queue_head_t r_wait;
     wait_queue_head_t w_wait;
-	spinlock_t lock;
 	struct tasklet_struct tasklet;
 };
 
@@ -461,7 +465,7 @@ static void a7139_reg_dump(struct rf_dev *dev)
     printk("%-15s%-6s0x%04X    0x%04X\n", "ADC", "R/W", rf_reg_cfg[ADC_REG], a7139_read_reg(dev, ADC_REG));
     printk("%-15s%-6s0x%04X    -\n", "PINCTRL", "W", rf_reg_cfg[PIN_REG]);
     printk("%-15s%-6s0x%04X    0x%04X\n", "CALIBRATION", "R/W", rf_reg_cfg[CALIBRATION_REG], a7139_read_reg(dev, CALIBRATION_REG));
-    printk("%-15s%-6s0x%04X    0x%04X\n", "SYSTEMCLOCK", "R/W", rf_reg_cfg[MODE_REG], a7139_read_reg(dev, MODE_REG));
+    printk("%-15s%-6s0x%04X    0x%04X\n", "MODE", "R/W", rf_reg_cfg[MODE_REG], a7139_read_reg(dev, MODE_REG));
 
     printk("\nRF PageA Register Config:\n");
     printk("%-15s%-6s%-10s%-10s\n", "Reg Name", "R/W", "DefValue", "CurrValue");
@@ -585,6 +589,13 @@ static int a7139_read_id(struct rf_dev *dev, uint8_t *id)
 ////////////////////////////////////////////////////////////////////////////////
 static void a7139_mode_switch(struct rf_dev *dev, A7139_MODE mode)
 {
+//    unsigned long flags;
+
+//    local_irq_save(flags);
+    if (dev->irq > 0) {
+        disable_irq_nosync(dev->irq);
+    }
+
     switch (mode)
     {
         case A7139_MODE_SLEEP:
@@ -610,12 +621,26 @@ static void a7139_mode_switch(struct rf_dev *dev, A7139_MODE mode)
         case A7139_MODE_RX:
             dev->rf_currmode = A7139_MODE_RX;
             a7139_send_ctrl(dev, CMD_STANDBY_MODE);
+            if ( in_interrupt() == 0)
+            {
+                spi_mdelay(1);
+            }
             a7139_send_ctrl(dev, CMD_RX_MODE);
+            break;
+
+        case A7139_MODE_RXING:
+            dev->rf_currmode = A7139_MODE_RXING;
+            a7139_send_ctrl(dev, CMD_STANDBY_MODE);
             break;
 
         case A7139_MODE_TX:
             dev->rf_currmode = A7139_MODE_TX;
             a7139_send_ctrl(dev, CMD_TX_MODE);
+            break;
+
+        case A7139_MODE_TXING:
+            dev->rf_currmode = A7139_MODE_TXING;
+            a7139_send_ctrl(dev, CMD_STANDBY_MODE);
             break;
 
         case A7139_MODE_DEEPSLEEPT:
@@ -630,6 +655,11 @@ static void a7139_mode_switch(struct rf_dev *dev, A7139_MODE mode)
 
         default:
             break;
+    }
+
+//    local_irq_restore(flags);
+    if (dev->irq > 0) {
+        enable_irq(dev->irq);
     }
 }
 
@@ -787,17 +817,11 @@ static int a7139_chip_init(struct rf_dev *dev)
 static void a7139_send_packet(struct rf_dev *dev, uint8_t *txBuffer, uint8_t size)
 {
     uint8_t i;
+    unsigned long flags;
 
-    // 发送数据包前关闭中断
-    if (dev->irq > 0) {
-        disable_irq(dev->irq);
-    }
+    //a7139_mode_switch(dev, A7139_MODE_STANDBY);     // enter standby mode
 
-    a7139_mode_switch(dev, A7139_MODE_STANDBY);     // enter standby mode
-
-    if (dev->irq > 0) {
-        enable_irq(dev->irq);
-    }
+    local_irq_save(flags);
 
     spi_defdelay();
     a7139_send_ctrl(dev, CMD_TFR);                  // TX FIFO address pointer reset
@@ -809,6 +833,8 @@ static void a7139_send_packet(struct rf_dev *dev, uint8_t *txBuffer, uint8_t siz
         a7139_byte_send(dev, txBuffer[i]);
     }
     gpio_pin_h(dev->pin.scs);
+
+    local_irq_restore(flags);
 
     a7139_mode_switch(dev, A7139_MODE_TX);
 }
@@ -837,6 +863,9 @@ static void a7139_send_packet(struct rf_dev *dev, uint8_t *txBuffer, uint8_t siz
 static uint8_t a7139_receive_packet(struct rf_dev *dev, uint8_t *buf, uint8_t len)
 {
     uint8_t i;
+    unsigned long flags;
+
+    local_irq_save(flags);
 
     a7139_send_ctrl(dev, CMD_RFR);      // RX FIFO address pointer reset
 
@@ -851,6 +880,7 @@ static uint8_t a7139_receive_packet(struct rf_dev *dev, uint8_t *buf, uint8_t le
 
     gpio_pin_h(dev->pin.scs);
 
+    local_irq_restore(flags);
     /*
     for (i = 0; i < 64; i++)
     {
@@ -1324,104 +1354,77 @@ static void a7139_pin_free(struct rf_dev *dev)
     gpio_free(dev->pin.gio1);
 }
 
+void a7139_readwork_func(struct work_struct *work)
+{
+    struct rf_dev *dev;
+
+    dev = container_of(work, struct rf_dev, work);
+
+    down(&dev->sem);
+
+    if (dev->rf_currmode == A7139_MODE_RXING) {
+        memset((void*)dev->rxbuf, 0, RF_BUFSIZE);
+        dev->rx_len = a7139_receive_packet(dev, dev->rxbuf, RF_BUFSIZE);
+        dev->rf_rxevt = 1;
+        wake_up_interruptible(&dev->r_wait);
+        a7139_mode_switch(dev, A7139_MODE_RX);
+    }
+
+    up(&dev->sem);
+}
+
+void a7139_writework_func(struct work_struct *work)
+{
+    struct rf_dev *dev;
+
+    dev = container_of(work, struct rf_dev, work);
+
+    down(&dev->sem);
+
+    if (dev->rf_currmode == A7139_MODE_TXING) {
+        a7139_send_packet(dev, dev->txbuf, dev->tx_len);
+        memset((void*)dev->txbuf, 0, RF_BUFSIZE);
+        dev->rf_txevt = 0;
+        dev->tx_len = 0;
+    }
+
+    up(&dev->sem);
+}
+
 static irqreturn_t a7139_interrupt(int irq, void *dev_id)
 {
     struct rf_dev *dev = (struct rf_dev *)dev_id;
-    /*
-    // 向a7139模块实时查询当前状态, 需要较长的时间
-    uint16_t status, mode;
-
-    status = a7139_read_reg(dev, MODE_REG);
-    mode = status & 0x0010;
-
-    if(!mode)
-    {
-    // 判断FEC和CRC位是否检测通过
-    if(!(mode & 0x0600))
-    {
-    dev->rf_rxevt = 1;
-    wake_up_interruptible(&dev->r_wait);
-    }
-    }
-    else
-    {
-    dev->rf_txevt = 1;
-    wake_up_interruptible(&dev->w_wait);
-    // 进入接收模式
-    a7139_mode_switch(dev, A7139_MODE_STANDBY);
-    a7139_mode_switch(dev, A7139_MODE_RX);
-    }
-    */
+    uint16_t status;
 
     debugf("%s a7139_interrupt: rf_currmode:%d\n", dev->name_alias, dev->rf_currmode);
-
-#if 1
-    // should be move to tasklet
-    if (dev->rf_currmode == A7139_MODE_RX) {
-        /**
-         * call tasklet function to receive packet and wake up process
-         * dev->rf_rxevt = 1;
-         * wake_up_interruptible(&dev->r_wait);
-        */
-        tasklet_schedule(&dev->tasklet);
-    }
-
-    else if (dev->rf_currmode == A7139_MODE_TX) {
-        dev->rf_txevt = 1;
-        wake_up_interruptible(&dev->w_wait);
-        // 进入接收模式
-        a7139_mode_switch(dev, A7139_MODE_STANDBY);
-        a7139_mode_switch(dev, A7139_MODE_RX);
-    }
-#endif
-
-    return IRQ_RETVAL(IRQ_HANDLED);
-}
-
-static void a7139_tasklet_func(unsigned long data)
-{
-    struct rf_dev *dev = (struct rf_dev *)data;
-    uint16_t tmp;
-
-	debugf("a7139_tasklet_func\n");
-
-	spin_lock(&dev->lock);
 
     if (dev->rf_currmode == A7139_MODE_RX) {
 
         /* check the hardware crc correct */
-        tmp = a7139_read_reg(dev, MODE_REG);
-        if (tmp & 0x0200) {
+        status = a7139_read_reg(dev, MODE_REG);
+
+        if (status & 0x0200) {
             printk(KERN_ERR "%s read crc error\n", dev->name_alias);
             a7139_send_ctrl(dev, CMD_RFR);      // RX FIFO address pointer reset
-        }
+            a7139_reg_dump(dev);
 
+            a7139_mode_switch(dev, A7139_MODE_RX);
+        }
         else {
-            dev->rx_len = a7139_receive_packet(dev, dev->rxbuf, RF_BUFSIZE);
-            dev->rf_rxevt = 1;
-            wake_up_interruptible(&dev->r_wait);
+            a7139_mode_switch(dev, A7139_MODE_RXING);
+
+            INIT_WORK(&dev->work, a7139_readwork_func);
+            queue_work(dev->work_queue, &dev->work);
         }
     }
-
-#if 0
-	/**
-	 * TODO:
-	 * write data from buffer to a7139 reg
-	 */
     else if (dev->rf_currmode == A7139_MODE_TX) {
         dev->rf_txevt = 1;
         wake_up_interruptible(&dev->w_wait);
 
-        // 进入接收模式
-        a7139_mode_switch(dev, A7139_MODE_STANDBY);
         a7139_mode_switch(dev, A7139_MODE_RX);
     }
-#endif
 
-	spin_unlock(&dev->lock);
-
-    a7139_mode_switch(dev, A7139_MODE_STANDBY);
-    a7139_mode_switch(dev, A7139_MODE_RX);
+    return IRQ_RETVAL(IRQ_HANDLED);
 }
 
 //**********************************************************************************
@@ -1458,19 +1461,6 @@ static ssize_t a7139_read(struct file *filp, char __user *buf, size_t count, lof
 
     down(&dev->sem);
 
-    /*
-    uint16_t tmp;
-    tmp = a7139_read_reg(dev, MODE_REG);
-    if (tmp & 0x0200) {
-        printk(KERN_ERR "%s read crc error\n", dev->name_alias);
-    }
-
-    dev->rx_len = a7139_receive_packet(dev, dev->rxbuf, RF_BUFSIZE);
-
-    a7139_mode_switch(dev, A7139_MODE_STANDBY);
-    a7139_mode_switch(dev, A7139_MODE_RX);
-    */
-
     len = (count > dev->rx_len ? dev->rx_len : count);
 
     if (copy_to_user(buf, (void*)dev->rxbuf, len)) {
@@ -1493,25 +1483,43 @@ static ssize_t a7139_write(struct file *filp, const char __user *buf, size_t cou
 {
     struct rf_dev *dev = filp->private_data;
     ssize_t len;
+    int err;
 
-    wait_event_interruptible(dev->w_wait, dev->rf_txevt);
+    err = wait_event_interruptible_timeout(dev->w_wait, dev->rf_txevt, msecs_to_jiffies(DEV_WRITE_TIMEOUT));
 
     debugf("a7139_write\n");
 
     down(&dev->sem);
+    if (err == 0)
+    {
+        debugf("a7139_write wait_event_interruptible_timeout\n");
+        dev->rf_txevt = 1;
+        up(&dev->sem);
+
+        return -EAGAIN;
+    }
+    else if (dev->rf_currmode != A7139_MODE_RX)
+    {
+        debugf("a7139_write rf_currmode is not A7139_MODE_RX\n");
+        up(&dev->sem);
+
+        return -EAGAIN;
+    }
+
+    a7139_mode_switch(dev, A7139_MODE_TXING);
 
     len = (count > RF_BUFSIZE ? RF_BUFSIZE : count);
 
     if (copy_from_user(dev->txbuf, buf, len)) {
         printk(KERN_ERR "%s: copy_from_user error\n", dev->name_alias);
+        up(&dev->sem);
+
         return -EFAULT;
     }
     dev->tx_len = len;
 
-    a7139_send_packet(dev, dev->txbuf, dev->tx_len);
-
-    dev->rf_txevt = 0;
-    dev->tx_len = 0;
+    INIT_WORK(&dev->work, a7139_writework_func);
+    queue_work(dev->work_queue, &dev->work);
 
     up(&dev->sem);
 
@@ -1533,7 +1541,7 @@ static unsigned int a7139_poll(struct file *filp, struct poll_table_struct *wait
     if (dev->rf_rxevt) {
         mask |= POLLIN | POLLRDNORM;
     }
-    if (dev->rf_txevt) {
+    if (dev->rf_txevt && dev->rf_currmode == A7139_MODE_RX) {
         mask |= POLLOUT | POLLWRNORM;
     }
 
@@ -1583,8 +1591,18 @@ static long a7139_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             break;
 
         case A7139_IOC_RESET:
+            cancel_work_sync(&dev->work);
+            flush_workqueue(dev->work_queue);
+            if (a7139_dev_init(dev)) {
+                printk(KERN_ERR "%s:a7139 dev init error!\n", dev->name_alias);
+
+                return -EBUSY;
+            }
+
             if (a7139_chip_init(dev)) {
-                ret = -EBUSY;
+                printk(KERN_ERR "%s:a7139 chip init error!\n", dev->name_alias);
+
+                return -ENODEV;
             }
             break;
 
@@ -1689,10 +1707,9 @@ static int a7139_open(struct inode *inode, struct file *filp)
     if (a7139_chip_init(dev)) {
         printk(KERN_ERR "%s:a7139 chip init error!\n", dev->name_alias);
         dev->opencount--;
-        return -EBUSY;
+        return -ENODEV;
     }
 
-    a7139_mode_switch(dev, A7139_MODE_STANDBY);
     a7139_mode_switch(dev, A7139_MODE_RX);
 
     dev->irq = gpio_to_irq(dev->pin.gio1);
@@ -1702,7 +1719,7 @@ static int a7139_open(struct inode *inode, struct file *filp)
         return -EINVAL;
     }
 
-    result = request_irq(dev->irq, a7139_interrupt, IRQF_TRIGGER_FALLING | IRQF_SHARED,
+    result = request_irq(dev->irq, a7139_interrupt, IRQF_TRIGGER_FALLING | IRQF_DISABLED,
             dev->name_alias, (void *)dev);
     if (result) {
         printk(KERN_ERR "%s: open - can't get irq\n", dev->name_alias);
@@ -1795,8 +1812,12 @@ static int a7139_setup_cdev(struct rf_dev *devs, int dev_nr)
 
         sema_init(&dev->sem, 1);
 
-        spin_lock_init(&dev->lock);
-        tasklet_init(&dev->tasklet, a7139_tasklet_func, (unsigned long)dev);
+        dev->work_queue = create_singlethread_workqueue(dev->name_alias);
+        if (!dev->work_queue)
+        {
+            printk(KERN_ERR "create workqueue fail!\n");
+            goto out;
+        }
     }
 
     return 0;
@@ -1837,6 +1858,8 @@ static void __exit a7139_exit(void)
         }
 
         a7139_pin_free(dev);
+
+        destroy_workqueue(dev->work_queue);
     }
 
     unregister_chrdev_region(MKDEV(a7139_major, 0), ARRAY_SIZE(devs));
