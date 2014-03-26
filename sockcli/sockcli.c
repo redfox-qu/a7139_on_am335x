@@ -10,6 +10,7 @@
 //      redfox.qu@qq.com    2014/02/12  1.0.0       create this file
 //      redfox.qu@qq.com    2014/02/27  1.0.1       improve sockcli self argument,
 //                                                  use argument address/port importent
+//      redfox.qu@qq.com    2014/03/06  1.0.2       free sockcli list when timeout
 //
 // TODO:
 //      2014/02/12          structure cli frame and process for the sock-ipc
@@ -42,6 +43,8 @@
 #define SKCLI_MSG(fmt, ...)
 #endif
 
+#define SKCLI_ERR_MSG           "###sockcli### "
+
 #define SKCLI_USAGE   " \
 Usage: sockcli [-I <address>] [-P <port>] [-T <timeout>] [-V] [-L] <appname> [options] \n \
     -I <address>                set server ip address \n \
@@ -65,6 +68,8 @@ int sockcli_rcv_timeout         = SKCLI_RCV_TOUT;
 int sockcli_opt_arg             = 0;
 int sockcli_argc_def            = 0;
 char **sockcli_argv_def         = NULL;
+
+struct sockcli_root sockcli_sipc_root;
 
 
 void sockcli_data_dump(char *buf, int size)
@@ -130,21 +135,24 @@ struct sockcli *sockcli_loaddef(void)
 
     sipc = malloc(sizeof(struct sockcli));
     if (sipc == NULL) {
-        fprintf(stderr, "###sockcli### malloc() failed");
+        fprintf(stderr, SKCLI_ERR_MSG "malloc() failed");
         return NULL;
     }
 
     bzero(sipc, sizeof(struct sockcli));
 
     INIT_LIST_HEAD(&sipc->list);
-    sipc->app_path = NULL;
-    sipc->app_name = NULL;
+    sipc->app_path = strdup(SKCLI_DEF_PATH);
+    sipc->app_name = strdup(SKCLI_DEF_NAME);
     sipc->handle = NULL;
     sipc->name_func = sockcli_def_app_name;
     sipc->addr_func = sockcli_def_srv_addr;
     sipc->argt_func = sockcli_def_argt_func;
     sipc->send_func = sockcli_def_send_func;
     sipc->recv_func = sockcli_def_recv_func;
+
+    list_add(&sipc->list, &sockcli_sipc_root.list);
+    sockcli_sipc_root.num++;
 
     return sipc;
 }
@@ -159,7 +167,12 @@ struct sockcli *sockcli_loaddef(void)
 *****************************************************************************/
 void sockcli_alrm_handler(int s)
 {
-    fprintf(stderr, "###sockcli###  recv message time out(%d)!\n", sockcli_rcv_timeout);
+    fprintf(stderr, SKCLI_ERR_MSG "recv message time out(%d)!\n", sockcli_rcv_timeout);
+
+    /* free the sockcli list */
+    sockcli_free(&sockcli_sipc_root);
+    SKCLI_MSG("sockcli_free ok\n");
+
     exit(10);
 }
 
@@ -184,7 +197,7 @@ int sockcli_prob(struct sockcli_root *sipcr)
     if (ret == GLOB_NOMATCH) {
         return 0;
     } else if (ret != 0) {
-        fprintf(stderr, "###sockcli### glob(): %s\n", strerror(errno));
+        fprintf(stderr, SKCLI_ERR_MSG "glob(): %s\n", strerror(errno));
         return 0;
     }
 
@@ -196,7 +209,7 @@ int sockcli_prob(struct sockcli_root *sipcr)
 
         sipc = malloc(sizeof(struct sockcli));
         if (sipc == NULL) {
-            fprintf(stderr, "###sockcli### malloc() failed");
+            fprintf(stderr, SKCLI_ERR_MSG "new sockcli malloc() failed");
             return -1;
         }
 
@@ -214,7 +227,7 @@ int sockcli_prob(struct sockcli_root *sipcr)
         /* open the sockcli plugin */
         sipc->handle = dlopen(sipc->app_path, RTLD_LAZY);
         if (!sipc->handle) {
-            fprintf(stderr, "###sockcli### dlopen() failed: %s\n", dlerror());
+            fprintf(stderr, SKCLI_ERR_MSG "dlopen() failed: %s\n", dlerror());
             return -1;
         }
         dlerror();  /* clear any existing error */
@@ -222,7 +235,7 @@ int sockcli_prob(struct sockcli_root *sipcr)
         /* get the sockcli plugin name */
         sipc->name_func = dlsym(sipc->handle, "app_name");
         if ((error = dlerror()) != NULL) {
-            fprintf(stderr, "###sockcli### dlsym(name) error: %s\n", error);
+            fprintf(stderr, SKCLI_ERR_MSG "dlsym(name) error: %s\n", error);
             return -1;
         }
         dlerror();  /* clear any existing error */
@@ -243,9 +256,13 @@ int sockcli_free(struct sockcli_root *sipcr)
     struct sockcli *sipc0, *sipc1;
 
     list_for_each_entry_safe(sipc0, sipc1, &sipcr->list, list) {
+        list_del(&sipc0->list);
         free(sipc0->app_name);
         free(sipc0->app_path);
-        list_del(&sipc0->list);
+        if (sipc0->handle) {
+            dlclose(sipc0->handle);
+        }
+        free(sipc0);
     }
 
     return 0;
@@ -271,13 +288,13 @@ int sockcli_open(struct sockcli *sipc)
 
     sipc->fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sipc->fd < 0) {
-        fprintf(stderr, "###sockcli### socket() error: %s", strerror(errno));
+        fprintf(stderr, SKCLI_ERR_MSG "socket() error: %s", strerror(errno));
         return -1;
     }
 
     ret = setsockopt(sipc->fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
     if (ret < 0) {
-        fprintf(stderr, "###sockcli### setsockopt() error: %s", strerror(errno));
+        fprintf(stderr, SKCLI_ERR_MSG "setsockopt() error: %s", strerror(errno));
         return -1;
     }
 
@@ -301,7 +318,7 @@ int sockcli_load(struct sockcli *sipc)
     SKCLI_MSG("load plugin files: %s\n", sipc->app_path);
 
     if (sipc->handle == NULL) {
-        fprintf(stderr, "###sockcli### handle not open\n");
+        fprintf(stderr, SKCLI_ERR_MSG "handle not open\n");
         return -1;
     }
 
@@ -311,7 +328,6 @@ int sockcli_load(struct sockcli *sipc)
     if ((error = dlerror()) != NULL) {
         sipc->argt_func = sockcli_def_argt_func;
         SKCLI_MSG("dlsym(argt_func) error: %s, use def_argt_func\n", error);
-        return -1;
     };
     dlerror();  /* clear any existing error */
 
@@ -321,7 +337,6 @@ int sockcli_load(struct sockcli *sipc)
     if ((error = dlerror()) != NULL) {
         sipc->send_func = sockcli_def_send_func;
         SKCLI_MSG("dlsym(send_func) error: %s, use def_send_func\n", error);
-        return -1;
     };
     dlerror();  /* clear any existing error */
 
@@ -331,7 +346,6 @@ int sockcli_load(struct sockcli *sipc)
     if ((error = dlerror()) != NULL) {
         sipc->recv_func = sockcli_def_recv_func;
         SKCLI_MSG("dlsym(recv_func) error: %s, use def_recv_func\n", error);
-        return -1;
     };
     dlerror();  /* clear any existing error */
 
@@ -339,14 +353,13 @@ int sockcli_load(struct sockcli *sipc)
     if ((error = dlerror()) != NULL) {
         sipc->addr_func = sockcli_def_srv_addr;
         SKCLI_MSG("dlsym(addr_func) error: %s, use def_srv_addr\n", error);
-        return -1;
     }
     dlerror();  /* clear any existing error */
 
 
     sipc->fd = -1;
-    inet_aton("127.0.0.1", &sipc->server_ip);
-    sipc->server_port = 0;
+    inet_aton(SKCLI_DEF_SRVADDR, &sipc->server_ip);
+    sipc->server_port = SKCLI_DEF_UDPPORT;
     bzero(&sipc->r_buf[0], SKCLI_BUF_SIZE);
     bzero(&sipc->w_buf[0], SKCLI_BUF_SIZE);
     sipc->r_len = 0;
@@ -361,10 +374,6 @@ int sockcli_unload(struct sockcli *sipc)
     bzero(&sipc->r_buf[0], SKCLI_BUF_SIZE);
     bzero(&sipc->w_buf[0], SKCLI_BUF_SIZE);
     sipc->r_len = sipc->w_len = 0;
-    if (sipc->handle) {
-        dlclose(sipc->handle);
-    }
-    exit(0);
 
     return 0;
 }
@@ -393,11 +402,10 @@ int sockcli_list(struct sockcli_root *sipcr)
 *****************************************************************************/
 int main(int argc, char **argv)
 {
-    struct sockcli_root sipc_root;
-    struct sockcli *sipc;
     struct sockaddr_in srvaddr;
     socklen_t sock_len;
     int ret, I = 1;
+    struct sockcli *sipc;
 
     if (argc < 2) {
         printf(SKCLI_USAGE);
@@ -433,7 +441,7 @@ int main(int argc, char **argv)
                     break;
 
                 default:
-                    fprintf(stderr, "###sockcli### Unkown argument %s\n", argv[I]);
+                    fprintf(stderr, SKCLI_ERR_MSG "Unkown argument %s\n", argv[I]);
                     fprintf(stderr, SKCLI_USAGE);
                     exit(EXIT_FAILURE);
             }
@@ -443,26 +451,26 @@ int main(int argc, char **argv)
     }
 
     if (signal(SIGALRM, sockcli_alrm_handler) == SIG_ERR) {
-        fprintf(stderr, "###sockcli### signal(SIGALRM) error\n");
+        fprintf(stderr, SKCLI_ERR_MSG "signal(SIGALRM) error\n");
         exit(EXIT_FAILURE);
     }
 
-    if (sockcli_init(&sipc_root) < 0) {
+    if (sockcli_init(&sockcli_sipc_root) < 0) {
         exit(EXIT_FAILURE);
     }
     SKCLI_MSG("sockcli_init ok\n");
 
-    if (sockcli_prob(&sipc_root) < 0) {
+    if (sockcli_prob(&sockcli_sipc_root) < 0) {
         exit(EXIT_FAILURE);
     }
     SKCLI_MSG("sockcli_prob ok\n");
 
     if (sockcli_opt_arg & SKCLI_ARG_LIST) {
-        sockcli_list(&sipc_root);
+        sockcli_list(&sockcli_sipc_root);
         goto err1;
     }
 
-    sipc = sockcli_find(&sipc_root, argv[I]);
+    sipc = sockcli_find(&sockcli_sipc_root, argv[I]);
     if (sipc != NULL) {
         SKCLI_MSG("sockcli_find %s ok\n", argv[I]);
         ret = sockcli_load(sipc);
@@ -471,7 +479,7 @@ int main(int argc, char **argv)
         }
         SKCLI_MSG("sockcli_load %s ok\n", argv[I]);
     } else {
-        fprintf(stderr, "###sockcli### %s not found, use default function\n", argv[I]);
+        fprintf(stderr, SKCLI_ERR_MSG "%s not found, use default function\n", argv[I]);
         sipc = sockcli_loaddef();
         if (sipc == NULL) {
             SKCLI_MSG("sockcli_loaddef error!\n");
@@ -491,7 +499,7 @@ int main(int argc, char **argv)
     // create msg quere
     ret = sockcli_open(sipc);
     if (ret < 0) {
-        fprintf(stderr, "###sockcli### sockcli_open error\n");
+        fprintf(stderr, SKCLI_ERR_MSG "sockcli_open error\n");
         goto err;
     }
     SKCLI_MSG("sockcli_open ok\n");
@@ -499,7 +507,7 @@ int main(int argc, char **argv)
 
     ret = sipc->addr_func(&sipc->server_ip, &sipc->server_port);
     if (ret < 0) {
-        fprintf(stderr, "###sockcli### sipc->addr_func error\n");
+        fprintf(stderr, SKCLI_ERR_MSG "sipc->addr_func error\n");
         goto err;
     }
     if (sockcli_opt_arg & SKCLI_ARG_ADDRESS) {
@@ -512,7 +520,7 @@ int main(int argc, char **argv)
 
     ret = sipc->send_func(&sipc->w_buf[0], &sipc->w_len);
     if (ret < 0) {
-        fprintf(stderr, "###sockcli### call %s sipc->send_func error\n", argv[I]);
+        fprintf(stderr, SKCLI_ERR_MSG "call %s sipc->send_func error\n", argv[I]);
         goto err;
     }
     SKCLI_MSG("sipc->send_func ok\n");
@@ -527,7 +535,7 @@ int main(int argc, char **argv)
     ret = sendto(sipc->fd, sipc->w_buf, sipc->w_len, 0,
             (struct sockaddr*)&srvaddr, sock_len);
     if (ret < 0) {
-        fprintf(stderr, "###sockcli### sendto() error: (%d)%s\n", ret, strerror(errno));
+        fprintf(stderr, SKCLI_ERR_MSG "sendto() error: (%d)%s\n", ret, strerror(errno));
         goto err;
     }
     SKCLI_MSG("sendto %s:%d len=%d\n", inet_ntoa(sipc->server_ip),
@@ -540,14 +548,14 @@ int main(int argc, char **argv)
 
     /* set to time out process */
     ret = alarm(sockcli_rcv_timeout);
-    SKCLI_MSG("timeout %d for receive message\n", ret);
+    SKCLI_MSG("set timeout %d for receive message\n", sockcli_rcv_timeout);
 
     sock_len = sizeof(srvaddr);
     ret = recvfrom(sipc->fd, sipc->r_buf, SKCLI_BUF_SIZE, 0,
             (struct sockaddr*)&srvaddr, &sock_len);
 
     if (ret <= 0) {
-        fprintf(stderr, "###sockcli### recvfrom() error: (%d)%s\n", ret, strerror(errno));
+        fprintf(stderr, SKCLI_ERR_MSG "recvfrom() error: (%d)%s\n", ret, strerror(errno));
         goto err;
     }
     SKCLI_MSG("recvfrom %s:%d len=%d\n", inet_ntoa(srvaddr.sin_addr),
@@ -563,7 +571,7 @@ int main(int argc, char **argv)
 
     ret = sipc->recv_func(sipc->r_buf, &sipc->r_len);
     if (ret < 0) {
-        fprintf(stderr, "###sockcli### call %s sipc->recv_func error\n", argv[I]);
+        fprintf(stderr, SKCLI_ERR_MSG "call %s sipc->recv_func error\n", argv[I]);
         goto err;
     }
     SKCLI_MSG("sipc->recv_func ok\n");
@@ -574,7 +582,7 @@ err:
     sockcli_unload(sipc);
     SKCLI_MSG("sockcli_unload ok\n");
 err1:
-    sockcli_free(&sipc_root);
+    sockcli_free(&sockcli_sipc_root);
     SKCLI_MSG("sockcli_free ok\n");
     exit(ret);
 }

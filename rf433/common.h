@@ -25,10 +25,8 @@
 #include <netinet/in.h>
 #include "list.h"
 #include "rf433pkg.h"
-#include "buffer.h"
-#ifdef APPLOG
 #include "applog.h"
-#endif
+#include "buffer.h"
 
 #ifdef UNUSED
 #elif defined(__GNUC__)
@@ -41,11 +39,48 @@
 
 #define ARRAY_SIZE(x)           (sizeof(x)/sizeof(x[0]))
 
-#define SERVER_MSG              1234
-#define CLIENT_MSG              4321
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define __LITTLE_ENDIAN_BITFIELD
+#elif __BYTE_ORDER == __BIG_ENDIAN
+#define __BIG_ENDIAN_BITFIELD
+#else
+#error	"Byte order error"
+#endif
 
-#define SRV_CTL_UDP_PORT        9843
-#define CLI_CTL_UDP_PORT        3489
+#define BSWAP_16(x)             ((((x) & 0xff00) >> 8) | (((x) & 0x00ff) << 8))
+#define BSWAP_32(x)             ((((x) & 0xff000000) >> 24) | (((x) & 0x00ff0000) >> 8) |\
+                                 (((x) & 0x0000ff00) << 8) | (((x) & 0x000000ff) << 24))
+#ifdef __LITTLE_ENDIAN_BITFIELD
+#define B16_H2L(X)              (X)             /* 16 bit to little endian */
+#define B32_H2L(X)              (X)             /* 32 bit to little endian */
+#define B16_H2B(X)              BSWAP_16(X)     /* 16 bit to big endian */
+#define B32_H2B(X)              BSWAP_32(X)     /* 32 bit to big endian */
+#define B16_L2H(X)              (X)             /* 16 bit little to host */
+#define B32_L2H(X)              (X)             /* 32 bit little to host */
+#define B16_B2H(X)              BSWAP_16(X)     /* 16 bit big endian to host */
+#define B32_B2H(X)              BSWAP_32(X)     /* 32 bit big endian to host */
+#define B16_H2N(X)              BSWAP_16(X)     /* 16 bit host to network */
+#define B32_H2N(X)              BSWAP_32(X)     /* 32 bit host to network */
+#else
+#define B16_H2L(X)              BSWAP_16(X)     /* 16 bit to little endian */
+#define B32_H2L(X)              BSWAP_32(X)     /* 32 bit to little endian */
+#define B16_H2B(X)              (X)             /* 16 bit to big endian */
+#define B32_H2B(X)              (X)             /* 32 bit to big endian */
+#define B16_L2H(X)              BSWAP_16(X)     /* 16 bit little to host */
+#define B32_L2H(X)              BSWAP_32(X)     /* 32 bit little to host */
+#define B16_B2H(X)              (X)             /* 16 bit big endian to host */
+#define B32_B2H(X)              (X)             /* 32 bit big endian to host */
+#define B16_L2N(X)              (X)             /* 16 bit host to network */
+#define B32_L2N(X)              (X)             /* 32 bit host to network */
+#endif
+
+#define BIT_CLR(x,b)            (x = ((x) & (~b)))
+#define BIT_SET(x,b)            (x = ((x) | (b)))
+#define BIT_MASK_SET(x,m,b)     (x = ((x) & (~m) | ((m) & (b))))
+#define BIT_TST(x,b)            ((x) | (b))
+
+#define SRV_CTL_UDP_PORT        60003
+#define CLI_CTL_UDP_PORT        61003
 
 #define MSG_REQ_SET_CFG         0x00000001
 #define MSG_REQ_GET_CFG         0x00000002
@@ -77,23 +112,13 @@
 #define RF433_NETID_BYTE_0      0xaa    /* 0x98 */
 #define RF433_NETID_MIN         0x01
 #define RF433_NETID_MAX         0xf0
-#define RF433_NETID(id)         ((RF433_NETID_BYTE_0<<8)|(id&0xff))
+#define RF433_NETID(id)         (((uint16_t)(id&0xff)<<8)|RF433_NETID_BYTE_0)
 #define RF433_RCVADDR_MIN       0x00000000
 #define RF433_RCVADDR_MAX       0x00ffffff
+#define RF433_BROADCAST         0xffffffff
 #define SE433_ADDR_MIN          0x01000000
 #define SE433_ADDR_MAX          0xfffffffe
 
-
-enum msg_syslog_level {
-    SYS_EMERG = LOG_EMERG,      /* 0 */
-    SYS_ALERT,                  /* 1 */
-    SYS_CRIT,                   /* 2 */
-    SYS_ERR,                    /* 3 */ /* dufault level */
-    SYS_WARNING,                /* 4 */
-    SYS_NOTICE,                 /* 5 */
-    SYS_INFO,                   /* 6 */
-    SYS_DEBUG                   /* 7 */
-};
 
 #define NAMESIZE                32
 struct collate_st {
@@ -115,13 +140,15 @@ struct collate_st {
 #define RF433_CFG_LOCAL_ADDR    0x00abcdef
 #define RF433_CFG_NET_ID        RF433_NETID(RF433_NETID_MIN)
 #define RF433_CFG_RATE          A7139_RATE_10K
-#define RF433_NET_ID(id)        ((uint8_t)(id & 0x00ff))
-#define RF433_WFREQ(id)         ((uint8_t)(id & 0x0f))
+#define RF433_NET_ID(id)        ((uint8_t)((id >> 8) & 0x00ff))
+#define RF433_WFREQ(id)         ((uint8_t)((id >> 8) & 0x0f))
 
 #define RF433_NVR_SRV_IP        "rf433_server_ip"
 #define RF433_NVR_UDP_PORT      "rf433_server_port"
 #define RF433_NVR_NET_ID        "rf433_net_id"
 #define RF433_NVR_LOCAL_ADDR    "rf433_local_addr"
+
+#define RF433_LOG_SOCKCLI       "sockcli rf433 -L"
 
 #define RF433_SHOW_SE_ADDR      "rf433_se_addr"
 #define RF433_SHOW_SE_DATA      "rf433_se_data"
@@ -183,25 +210,32 @@ struct msg_st {
 #pragma pack ()
 
 
-int get_debug_mode(void);
+int get_foreground_mode(void);
 
-#ifdef APPLOG
-#define app_openlog(logname)            open_app_log(logname)
-#define app_printf(level, fmt, ...)     do {    \
-                                            if (get_debug_mode()) { \
+#ifdef USE_APPLOG
+#define app_log_open(logname)            applog_open(logname, LOG_ERR, RF433_LOG_SOCKCLI)
+#define app_log_printf(level, fmt, ...)     do {    \
+                                            if (get_foreground_mode()) { \
                                                 sys_printf(level, fmt, ## __VA_ARGS__);     \
                                             } else {                \
-                                                print_app_log(level, fmt, ## __VA_ARGS__);  \
+                                                applog_print(level, fmt, ## __VA_ARGS__);  \
                                             }   \
                                         } while(0)
+#define app_log_close()                 applog_close()
+#define app_log_level_set(l)            applog_level_set(l)
+#define app_log_level_get()             applog_level_get()
 #else
-#define app_openlog(logname)            sys_openlog(logname)
-#define app_printf(level, fmt, ...)     sys_printf(level, fmt, ## __VA_ARGS__)
+#define app_log_open(logname)           sys_openlog(logname)
+#define app_log_printf(level, fmt, ...) sys_printf(level, fmt, ## __VA_ARGS__)
+#define app_log_close()                 closelog()
+#define app_log_level_set(l)            set_loglevel(l)
+#define app_log_level_get()             get_loglevel()
 #endif
-#define TRACE(fmt, args...)             app_printf(SYS_DEBUG, fmt, ##args)
+#define TRACE(fmt, args...)             app_log_printf(LOG_DEBUG, fmt, ##args)
 
 void sys_openlog(char *logname);
 void set_loglevel(int n);
+int get_loglevel(void);
 void sys_printf(int level, const char *format, ...);
 int getvalue(char *opt, int *value, int base);
 int get_ip(char* ip, struct in_addr *ip_addr);

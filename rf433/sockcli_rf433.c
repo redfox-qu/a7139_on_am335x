@@ -18,9 +18,10 @@
 #include <string.h>
 #include "sockcli.h"
 #include "common.h"
+#include "rf433lib.h"
 
 #define APP_NAME    "rf433"
-#define SRV_ADDR    "192.168.1.3"
+#define SRV_ADDR    "127.0.0.1"
 #define SRV_PORT    SRV_CTL_UDP_PORT
 
 #define USAGE   " \
@@ -32,10 +33,10 @@ Usage: rf433 [options] \n \
     -c, --show                  Show the current config \n \
     -l, --selist                Show se433 sensor list \n \
     -L, --loglevel              choose loglevel \n \
-                                1:LOG_EMERG,    2:LOG_ALERT \n \
-                                3:LOG_CRIT,     4:LOG_ERR \n \
-                                5:LOG_WARING,   6:LOG_NOTICE \n \
-                                7:LOG_INFO,     8:LOG_DEBUG \n \
+                                0:LOG_EMERG,    1:LOG_ALERT \n \
+                                2:LOG_CRIT,     3:LOG_ERR \n \
+                                4:LOG_WARING,   5:LOG_NOTICE \n \
+                                6:LOG_INFO,     7:LOG_DEBUG \n \
 config options: \n \
     -N, --id=netid              433 network id \n \
     -A, --addr=433addr          433 receive address \n \
@@ -294,16 +295,16 @@ void show_se433_list(struct msg_st *rmsg)
     se433data = (se433_data *)&rmsg->d.content[2];
 
     for (i = 0; i < num; i++) {
-        printf("addr=0x%08x, req_cnt=%d, rsp_cnt=%d, type=0x%02x, " \
-                "data=%.3f, vol=0x%02x, batt=0x%02x, flag=0x%02x, whid=0x%02x\n",
+        printf("addr=0x%08x, req_cnt=%d, rsp_cnt=%d, type=%s, " \
+                "data=%.3f, vol=%s, batt=%s, flag=%s, whid=%d\n",
                 se433data->addr,
                 se433data->req_cnt,
                 se433data->rsp_cnt,
-                se433data->data.type,
+                se433_get_type_str(se433data->data.type),
                 se433data->data.data,
-                se433data->data.vol,
-                se433data->data.batt,
-                se433data->data.flag,
+                se433_get_vol_str(se433data->data.vol),
+                se433_get_batt_str(se433data->data.batt),
+                se433_get_flags_str(se433data->data.flag),
                 se433data->data.watchid);
         se433data++;
     }

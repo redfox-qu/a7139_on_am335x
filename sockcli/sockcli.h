@@ -28,6 +28,7 @@
 #define SKCLI_BUF_SIZE           4096
 
 #define SKCLI_RCV_TOUT          3
+#define SKCLI_DEF_PATH          "./"
 #define SKCLI_DEF_NAME          "def_name"
 #define SKCLI_DEF_SRVADDR       "127.0.0.1"
 #define SKCLI_DEF_UDPPORT       60000

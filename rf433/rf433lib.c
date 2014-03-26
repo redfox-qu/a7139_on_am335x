@@ -53,6 +53,25 @@ char *a7139_rate_str[] = {
     "A7139_RATE_50K",
 };
 
+char *se433_type_str[] = {
+    "NON",
+    "CH4",
+    "CO",
+    "TEMP",
+};
+
+char *se433_state_str[] = {
+    "SE433_STATE_NON",
+    "SE433_STATE_RESET",
+    "SE433_STATE_REGISTER",
+    "SE433_STATE_REG_REQ",
+    "SE433_STATE_REG_RSP",
+    "SE433_STATE_POLL",
+    "SE433_STATE_POLL_REQ",
+    "SE433_STATE_POLL_RSP",
+};
+
+
 char *rf433_get_freq_str(A7139_FREQ wfreq)
 {
     if (wfreq >= A7139_FREQ_MAX) {
@@ -71,6 +90,58 @@ char *rf433_get_rate_str(A7139_RATE rate)
     return a7139_rate_str[rate];
 }
 
+char *se433_get_type_str(uint8_t type)
+{
+    if (type >= ARRAY_SIZE(se433_type_str)) {
+        return NULL;
+    }
+
+    return se433_type_str[type];
+}
+
+char *se433_get_state_str(enum SE433_STATE state)
+{
+    if (state >= ARRAY_SIZE(se433_state_str)) {
+        return NULL;
+    }
+
+    return se433_state_str[state];
+}
+
+char *se433_get_vol_str(uint8_t vol)
+{
+    static char vol_str[16];
+
+    snprintf(vol_str, 16, "%d.%dV", (vol&0xf0)>>4, (vol&0x0f));
+
+    return vol_str;
+}
+
+char *se433_get_batt_str(uint8_t batt)
+{
+    static char batt_str[16];
+
+    snprintf(batt_str, 16, "%d%%", (batt > 100) ? 100 : batt);
+
+    return batt_str;
+}
+
+char *se433_get_flags_str(uint8_t flags)
+{
+    static char flags_str[1024];
+    int p = 0;
+
+    p += snprintf(flags_str + p, 1024 - p, "%s", flags & RSWP433_FLAG_MPOW ? "PP" : "BP");
+    if (flags & RSWP433_FLAG_PROBE) {
+        p += snprintf(flags_str + p, 1024 - p, ",E_PROB");
+    }
+    if (flags & RSWP433_FLAG_BATTERY) {
+        p += snprintf(flags_str + p, 1024 - p, ",E_BATT");
+    }
+
+    return flags_str;
+}
+
 /*****************************************************************************
 * Function Name  : open_rf433
 * Description    : open the rf433 device
@@ -84,7 +155,7 @@ int open_rf433(char *dev)
 
     fd = open(dev, O_RDWR);
     if (fd == -1) {
-        app_printf(SYS_ERR, "open_rf433(%s) Error: %s\n", dev, strerror(errno));
+        app_log_printf(LOG_ERR, "open_rf433(%s) Error: %s\n", dev, strerror(errno));
         return -1;
     }
 
@@ -104,7 +175,7 @@ int open_socket(void)
 
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd == -1) {
-        app_printf(SYS_ERR, "socket() error: %s", strerror(errno));
+        app_log_printf(LOG_ERR, "socket() error: %s", strerror(errno));
         return -1;
     }
 
@@ -125,9 +196,9 @@ void set_non_blk(int fd)
 		if (errno == ENODEV) {
 			/* Some devices (like /dev/null redirected in)
 			 * can't be set to non-blocking */
-			app_printf(SYS_DEBUG, "ignoring ENODEV for setnonblocking");
+			app_log_printf(LOG_DEBUG, "ignoring ENODEV for setnonblocking");
 		} else {
-			app_printf(SYS_DEBUG, "Couldn't set nonblocking");
+			app_log_printf(LOG_DEBUG, "Couldn't set nonblocking");
 		}
 	}
 }
@@ -149,17 +220,22 @@ int set_socket_opt(int fd, uint16_t lport)
 
     ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
 
-    bzero(&srvaddr, sizeof(srvaddr));
-    srvaddr.sin_family = AF_INET;
-    srvaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    srvaddr.sin_port = htons(lport);
+    if (lport != 0) {
+        bzero(&srvaddr, sizeof(srvaddr));
+        srvaddr.sin_family = AF_INET;
+        srvaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+        srvaddr.sin_port = htons(lport);
 
-    ret = bind(fd, (struct sockaddr*)&srvaddr, sizeof(srvaddr));
-    if (ret == -1) {
-        app_printf(SYS_ERR, "open_socket() error: %s", strerror(errno));
-        return -1;
+        ret = bind(fd, (struct sockaddr*)&srvaddr, sizeof(srvaddr));
+        if (ret == -1) {
+            app_log_printf(LOG_ERR, "open_socket() error: %s", strerror(errno));
+            return -1;
+        }
+        TRACE("%-20s: %d", "sockopt.local_port", lport);
     }
-    TRACE("%-20s: %d", "sockopt.local_port", lport);
+    else {
+        TRACE("no listen port set");
+    }
 
     return ret;
 }
@@ -259,18 +335,24 @@ se433_list *se433_add(se433_head *head, uint32_t addr)
 
 
     if (head->num >= RF433_SE433_MAX) {
-        app_printf(SYS_ERR, "se433 list full");
+        app_log_printf(LOG_ERR, "se433 list full");
+        return NULL;
+    }
+
+    /* check se433 address validity */
+    if (addr < SE433_ADDR_MIN || addr > SE433_ADDR_MAX) {
+        app_log_printf(LOG_ERR, "se433 address 0x%08x invalid", addr);
         return NULL;
     }
 
     if ((se433l = se433_find(head, addr)) != NULL) {
-        app_printf(SYS_WARNING, "se433 0x%x duplicate", addr);
+        app_log_printf(LOG_WARNING, "se433 0x%08x duplicate", addr);
         return se433l;
     }
 
     se433l = (se433_list*)malloc(sizeof(se433_list));
     if (se433l == NULL) {
-        app_printf(SYS_ERR, "new se433 list memory error");
+        app_log_printf(LOG_ERR, "new se433 list memory error");
         return NULL;
     }
     memset((char*)se433l, 0, sizeof(se433_list));
@@ -282,7 +364,7 @@ se433_list *se433_add(se433_head *head, uint32_t addr)
     list_add(&se433l->list, &head->list);
     head->num++;
 
-    app_printf(SYS_DEBUG, "se433_add 0x%08x\n", se433l->se433.addr);
+    app_log_printf(LOG_DEBUG, "se433_add 0x%08x\n", se433l->se433.addr);
 
     return se433l;
 }
@@ -303,16 +385,30 @@ int se433_del(se433_head *head, uint32_t addr)
             list_del(&se433l->list);
             head->num--;
 
-            app_printf(SYS_DEBUG, "se433_del 0x%08x\n", se433l->se433.addr);
+            app_log_printf(LOG_DEBUG, "se433_del 0x%08x\n", se433l->se433.addr);
 
             free(se433l);
             return 0;
         }
     }
 
-    app_printf(SYS_WARNING, "cannot find se433 %d to del\n", addr);
+    app_log_printf(LOG_WARNING, "cannot find se433 %d to del\n", addr);
 
     return -1;
+}
+
+int se433_clean(se433_head *head)
+{
+    se433_list *se433l, *se433n;
+
+    list_for_each_entry_safe(se433l, se433n, &head->list, list) {
+        list_del(&se433l->list);
+        head->num--;
+        app_log_printf(LOG_DEBUG, "se433_del 0x%08x\n", se433l->se433.addr);
+        free(se433l);
+    }
+
+    return 0;
 }
 
 int se433_data_add(se433_list *se433l, se433_data *data)
@@ -332,13 +428,14 @@ void se433_list_show(se433_head *head)
     se433_list *se433l;
 
     list_for_each_entry(se433l, &head->list, list) {
-        app_printf(SYS_DEBUG, "addr=0x%08x, data=%.3f, req_cnt=%d, rsp_cnt=%d\n",
+        app_log_printf(LOG_DEBUG, "addr=0x%08x, data=%.3f, req_cnt=%d, rsp_cnt=%d\n",
                 se433l->se433.addr,
                 se433l->se433.data.data,
                 se433l->se433.req_cnt,
                 se433l->se433.rsp_cnt);
     }
 }
+
 
 /*****************************************************************************
 * Function Name  : rf433_set_netid
@@ -545,17 +642,25 @@ int rswp433_data_req(se433_list *se433l, rf433_instence *rf433x, buffer *buf)
 int rswp433_data_rsp(rswp433_pkg *pkg, rf433_instence *rf433x, buffer *buf)
 {
     se433_list *se433l;
+    rswp433_pkg net_pkg;
+    uint32_t data;
 
     /* update new data to se433 */
     se433l = se433_find(&rf433x->se433, pkg->u.data_content.src_addr);
     if (se433l == NULL) {
-        app_printf(SYS_WARNING, "cannot find se433 %d to add data\n", pkg->u.data_content.src_addr);
+        app_log_printf(LOG_WARNING, "cannot find se433 0x%08x to add data\n", pkg->u.data_content.src_addr);
         return -1;
     }
 
     if (se433l->state != SE433_STATE_POLL_REQ) {
-        app_printf(SYS_WARNING, "se433 state error got(%d) want(%d)\n",
-                se433l->state, SE433_STATE_POLL_REQ);
+        app_log_printf(LOG_WARNING, "se433 0x%08x state error got(%d) want(%d)\n",
+                se433l->se433.addr, se433l->state, SE433_STATE_POLL_REQ);
+
+        /* offline the error state se433 */
+        app_log_printf(LOG_INFO, "se433 0x%08x offline, req_cnt=%d, rsp_cnt=%d",
+                se433l->se433.addr, se433l->se433.req_cnt, se433l->se433.rsp_cnt);
+        se433_del(&rf433x->se433, pkg->u.data_content.src_addr);
+
         return -1;
     }
 
@@ -565,14 +670,22 @@ int rswp433_data_rsp(rswp433_pkg *pkg, rf433_instence *rf433x, buffer *buf)
     memcpy(&se433l->se433.data, &pkg->u.data_content.data, sizeof(rswp433_data));
     //se433_data_add(se433l, &pkg->u.data_content.data);
 
-    app_printf(SYS_DEBUG, "poll response dest_addr=0x%08x, src_addr=0x%08x, data=%.2f\n",
+    app_log_printf(LOG_DEBUG, "poll response dest_addr=0x%08x, src_addr=0x%08x, data=%.2f\n",
             pkg->u.content.dest_addr,
             pkg->u.content.src_addr,
             pkg->u.data_content.data.data);
 
+    /* translate to network endian */
+    memcpy(&net_pkg, pkg, sizeof(rswp433_pkg));
+    net_pkg.u.data_content.dest_addr = B32_H2N(net_pkg.u.data_content.dest_addr);
+    net_pkg.u.data_content.src_addr = B32_H2N(net_pkg.u.data_content.src_addr);
+    memcpy(&data, &net_pkg.u.data_content.data.data, sizeof(uint32_t));
+    data = B32_H2N(data);
+    memcpy(&net_pkg.u.data_content.data.data, &data, sizeof(uint32_t));
+
     /* copy data to udp buffer */
     buf_clean(buf);
-    buf_append(buf, (char*)&pkg->u.data_content, sizeof(rswp433_pkg_data_content));
+    buf_append(buf, (char*)&net_pkg.u.data_content, sizeof(rswp433_pkg_data_content));
 
     return 0;
 }
@@ -611,7 +724,7 @@ int rswp433_pkg_analysis(buffer *buf, rswp433_pkg *pkg)
 
                 } else {
                     /* crc2 check error */
-                    app_printf(SYS_DEBUG, "check rcr2 error 0x%02x\n", ret);
+                    app_log_printf(LOG_DEBUG, "check rcr2 error 0x%02x\n", ret);
 
                     /* rswp433 package content crc error, discard all package */
                     return 0;
@@ -619,7 +732,7 @@ int rswp433_pkg_analysis(buffer *buf, rswp433_pkg *pkg)
 
             } else {
                 /* crc1 check error */
-                app_printf(SYS_DEBUG, "check crc1 error 0x%02x\n", ret);
+                app_log_printf(LOG_DEBUG, "check crc1 error 0x%02x\n", ret);
 
                 /* skip 2 byte */
                 i = i + 1;

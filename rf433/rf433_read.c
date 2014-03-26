@@ -136,7 +136,7 @@ int main(int argc, char *argv[])
 
             case 'n':
                 se433_set |= SE433_SET_NETID;
-                se433_netid = atoi(optarg);
+                se433_netid = RF433_NETID(atoi(optarg));
                 break;
 
             case 'w':

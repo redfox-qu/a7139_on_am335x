@@ -25,9 +25,9 @@ export HOSTLD           = ld
 UBOOT_DIR               = $(TOP_DIR)/u-boot-2011.09-psp04.06.00.08
 
 #The directory that points to the Linux kernel source tree
-LINUX_DIR               = $(TOP_DIR)/linux
-LINUXKERNEL_DIR         = $(LINUX_DIR)/linux-$(LINUX_VER)
-LINUXCONFIG_DIR         = $(LINUX_DIR)/config/linux-$(LINUX_VER)
+LINUX_DIR               = $(TOP_DIR)/kernel
+LINUXKERNEL_DIR         = $(LINUX_DIR)
+LINUXCONFIG_DIR         = $(LINUX_DIR)
 
 #The directory that points to the fs source tree
 FS_DIR                  = $(TOP_DIR)/fs

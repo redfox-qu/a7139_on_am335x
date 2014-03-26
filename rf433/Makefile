@@ -1,4 +1,4 @@
-TOP_DIR 	:= $(CURDIR)/..
+TOP_DIR 	:= $(CURDIR)/../..
 
 include $(TOP_DIR)/Env.make
 
@@ -10,7 +10,7 @@ RFP_S_SHELL	:= S90rfrepeater
 VRFP_TEST	:= rf433_udp_test
 ERFP_TEST	:= rf433_se433_test
 RD_TEST		:= rf433_read
-TARGET 		:= $(RFP_TARGET) $(RFC_TARGET) $(VRFP_TEST) $(ERFP_TEST) $(RD_TEST)
+TARGET 		:= $(RFP_TARGET) $(VRFP_TEST) $(ERFP_TEST) $(RD_TEST) $(RFC_TARGET) 
 INST_DIR  	:= $(INSTALL_ROOTFS_DIR)/rf433
 INST_ETC_D  := $(INST_DIR)/etc
 INST_BIN_D	:= $(INST_DIR)/usr/sbin
@@ -22,9 +22,8 @@ ERFP_OBJS	:= rf433_se433_test.o rf433lib.o common.o buffer.o
 RD_OBJS		:= rf433_read.o rf433lib.o common.o buffer.o
 RF_HEADER	:= rfrepeater.h rf433lib.h rf433pkg.h common.h rfcli.h buffer.h list.h
 
-#CFLAGS_EXTEND	+= -DAPPLOG
 
-CFLAGS  	+= -I$(FS_DIR)/nvram -I$(FS_DIR)/applog -I./ -I$(LINUXKERNEL_DIR) -g -Werror -Wall $(CFLAGS_EXTEND)
+CFLAGS  	+= -I$(FS_DIR)/nvram -I$(FS_DIR)/applog -I./ -I$(LINUXKERNEL_DIR) -g -Werror -Wall -DUSE_APPLOG $(CFLAGS_EXTEND)
 LDFLAGS 	+= -L$(FS_DIR)/nvram -L$(FS_DIR)/applog -lpthread -lnvram -lapplog
 
 all: $(TARGET) SKCLI_ALL
@@ -58,9 +57,9 @@ install: SKCLI_INSTALL
 	$(ECHO)echo INSTALL $(RFP_TARGET)
 	$(ECHO)install -p -D -m 0755 $(RFP_TARGET) $(INST_BIN_D)/$(RFP_TARGET)
 	$(ECHO)$(STRIP) $(INST_BIN_D)/$(RFP_TARGET)
-	$(ECHO)echo INSTALL $(RFC_TARGET)
-	$(ECHO)install -p -D -m 0755 $(RFC_TARGET) $(INST_BIN_D)/$(RFC_TARGET)
-	$(ECHO)$(STRIP) $(INST_BIN_D)/$(RFC_TARGET)
+	#$(ECHO)echo INSTALL $(RFC_TARGET)
+	#$(ECHO)install -p -D -m 0755 $(RFC_TARGET) $(INST_BIN_D)/$(RFC_TARGET)
+	#$(ECHO)$(STRIP) $(INST_BIN_D)/$(RFC_TARGET)
 	$(ECHO)echo INSTALL $(RFP_SHELL)
 	$(ECHO)install -p -D -m 0755 $(RFP_SHELL) $(INST_ETC_D)/init.d/$(RFP_TARGET)
 	$(ECHO)echo INSTALL $(RFP_S_SHELL)

@@ -99,8 +99,7 @@ int scli_daemon_proc(char *rbuf, int rlen, char *wbuf, int *wlen)
 
 int main(int argc, char *argv[])
 {
-    int ret, ctl_fd;
-    fd_set rset, wset;
+    int ctl_fd;
     char rbuf[1024], wbuf[1024];
     int rlen, wlen;
     struct sockaddr_in cli_addr;

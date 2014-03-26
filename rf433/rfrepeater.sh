@@ -11,19 +11,19 @@ test -x "$cmd" || exit 1
 
 case "$1" in
 	start)
-		echo -n "Starting $name"
+		echo -n "Starting $name. "
 		start-stop-daemon --start --quiet --exec $cmd
 		echo "."
 		;;
 
 	stop)
-		echo -n "Stopping $name"
+		echo -n "Stopping $name. "
 		start-stop-daemon --stop --quiet --exec $cmd
 		echo "."
 		;;
 
 	restart)
-		echo -n "Stopping $name"
+		echo -n "Stopping $name. "
 		start-stop-daemon --stop --quiet --exec $cmd
 		echo "."
 		echo -n "Waiting for cmd to die off"
@@ -33,7 +33,7 @@ case "$1" in
 			echo -n "."
 		done
 		echo ""
-		echo -n "Starting $name"
+		echo -n "Starting $name. "
 		start-stop-daemon --start --quiet --exec $cmd
 		echo "."
 		;;

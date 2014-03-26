@@ -1,6 +1,6 @@
 
 SKCLI_DIR		:= $(FS_DIR)/sockcli
-SKCLI_INST_DIR	:= $(INST_DIR)/var/lib
+SKCLI_INST_DIR	:= $(INST_DIR)/usr/lib
 
 SKCLI_OBJEXT  	:= .skcli
 SKCLI_SRCEXT	:= .c
@@ -9,10 +9,11 @@ SKCLI_SRCS 		:= sockcli_rf433.c
 SKCLI_HEAD		:= $(SKCLI_DIR)/sockcli.h
 SKCLI_OBJS 		:= $(addsuffix $(SKCLI_OBJEXT), $(basename $(SKCLI_SRCS)))
 
+SKCLI_SRCS_ADD	:= common.c rf433lib.c
 
-$(SKCLI_OBJS): $(SKCLI_SRCS) $(SKCLI_HEAD)
+$(SKCLI_OBJS): $(SKCLI_SRCS) $(SKCLI_HEAD) $(SKCLI_SRCS_ADD)
 	$(ECHO)echo CC $@
-	$(ECHO)$(CC) $(CFLAGS) -I$(SKCLI_DIR) -shared -fPIC -o $@ $(addsuffix $(SKCLI_SRCEXT), $(basename $@)) -lc
+	$(ECHO)$(CC) $(CFLAGS) -I$(SKCLI_DIR) -shared -fPIC -o $@ $(SKCLI_SRCS) $(SKCLI_SRCS_ADD) -lc
 
 SKCLI_ALL: $(SKCLI_OBJS)
 

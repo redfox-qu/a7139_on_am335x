@@ -30,8 +30,8 @@ typedef struct {
     float data;                             /* 传感器数据，采用IEEE745浮点数格式 */
     uint8_t vol;                            /* 传感器电压，0xAB表示A.B伏 */
     uint8_t batt;                           /* 电池剩余电量，0-0x64表示0%-100% */
-    uint8_t flag;                           /* 巡检遥控器编码 */
-    uint8_t watchid;
+    uint8_t flag;                           /* 状态码 */
+    uint8_t watchid;                        /* 巡检遥控器编码 */
 } rswp433_data;
 
 typedef struct {

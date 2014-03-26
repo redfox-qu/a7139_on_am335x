@@ -28,8 +28,8 @@
 #include "common.h"
 #include "drivers/char/a7139.h"
 
-int loglevel = SYS_DEBUG;
-int debug_mode = 0;
+int loglevel = LOG_DEBUG;
+int foreground_mode = 0;
 int exitflag = 0;
 
 struct collate_st avail_rate_col[] = {
@@ -94,14 +94,14 @@ unsigned char CRC8_TAB[256] = {
     0xb6, 0xe8, 0x0a, 0x54, 0xd7, 0x89, 0x6b, 0x35
 };
 
-int get_debug_mode(void)
+int get_foreground_mode(void)
 {
-    return debug_mode;
+    return foreground_mode;
 }
 
 /*****************************************************************************
 * Function Name  : set_loglevel
-* Description    : set rfrepeater deamon syslog debug level
+* Description    : set rfrepeater deamon syslog level
 * Input          : int
 * Output         : None
 * Return         : void
@@ -115,6 +115,18 @@ void set_loglevel(int n)
     }
 
     return;
+}
+
+/*****************************************************************************
+* Function Name  : get_loglevel
+* Description    : get rfrepeater deamon syslog level
+* Input          : int
+* Output         : None
+* Return         : void
+*****************************************************************************/
+int get_loglevel(void)
+{
+    return loglevel;
 }
 
 /*****************************************************************************
@@ -150,10 +162,19 @@ void sys_printf(int level, const char* format, ...)
     vsnprintf(tmpline, 1023, format, args);
     va_end(args);
 
-    if (debug_mode) {
+    if (foreground_mode) {
         time_t t;
+        struct tm tmt;
         t = time(NULL);
-        fprintf(stderr, "[%s] %s\n", ctime(&t), tmpline);
+        localtime_r(&t, &tmt);
+        fprintf(stderr, "[%04d/%02d/%02d %02d:%02d:%02d] %s\n",
+                tmt.tm_year+1900,
+                tmt.tm_mon,
+                tmt.tm_mday,
+                tmt.tm_hour,
+                tmt.tm_min,
+                tmt.tm_sec,
+                tmpline);
     } else {
         syslog(level, tmpline);
     }
@@ -249,8 +270,7 @@ int get_netid(char *str, uint16_t *netid)
 
     if (getvalue(str, &val, 10)) {
         if (val >= RF433_NETID_MIN && val < RF433_NETID_MAX) {
-            val |= (RF433_NETID_BYTE_0 << 8);
-            *netid = (uint16_t)val;
+            *netid = RF433_NETID(val);
             return 0;
         }
     }
@@ -325,14 +345,14 @@ int get_se433_list(char *str, se433_head *head)
 
         se433 = (se433_list*)malloc(sizeof(se433_list));
         if (se433 == NULL) {
-            sys_printf(SYS_ERR, "get_se433_id() alloc memory error");
+            sys_printf(LOG_ERR, "get_se433_id() alloc memory error");
             continue;
         }
 
         INIT_LIST_HEAD(&se433->list);
 
         if (get_se433_addr(tmpstr, &se433->se_addr) == -1) {
-            sys_printf(SYS_ERR, "get_se433_id():get_se433_addr():config(%s) error", tmpstr);
+            sys_printf(LOG_ERR, "get_se433_id():get_se433_addr():config(%s) error", tmpstr);
             free(se433);
         } else {
             list_add(&se433->list, &head->list);
@@ -356,7 +376,7 @@ int get_log_level(char *str, int *log_level)
 {
     int val;
     if (getvalue(str, &val, 10)) {
-        if (val >= SYS_EMERG && val <= SYS_DEBUG) {
+        if (val >= LOG_EMERG && val <= LOG_DEBUG) {
             *log_level = val;
             return 0;
         }

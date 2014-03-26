@@ -1,4 +1,4 @@
-TOP_DIR 		:= $(CURDIR)/..
+TOP_DIR 		:= $(CURDIR)/../..
 include $(TOP_DIR)/Env.make
 
 INST_DIR  		:= $(INSTALL_ROOTFS_DIR)/sockcli
@@ -13,17 +13,17 @@ MAIN_OBJS 		:= $(basename $(MAIN_SRCS))
 TEST_SRCS		:= sockcli_daemon_test.c sockcli_daemon_noplugin_test.c
 TEST_OBJS 		:= $(basename $(TEST_SRCS))
 
-CFLAGS  		+= 
+CFLAGS  		+= -g -Werror -Wall
 
 all: $(MAIN_OBJS) $(TEST_OBJS) SKCLI_ALL
 
 $(MAIN_OBJS): $(MAIN_SRCS) $(SKCLI_HEAD)
 	$(ECHO)echo CC $@
-	$(ECHO)$(CC) $(MAIN_SRCS) -o $@ -ldl
+	$(ECHO)$(CC) $(CLFAGS) $(MAIN_SRCS) -o $@ -ldl
 
 $(TEST_OBJS): $(TEST_SRCS)
 	$(ECHO)echo HOSTCC $@
-	$(ECHO)$(HOSTCC) $(addsuffix .c, $@) -o $@
+	$(ECHO)$(HOSTCC) $(CFLAGS) $(addsuffix .c, $@) -o $@
 
 install: SKCLI_INSTALL
 	$(ECHO)echo INSTALL $(MAIN_OBJS)
